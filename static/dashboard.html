@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SensorFusion HAR — Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow-x:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0a0a0f;color:#e0e0e0}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:#0d0d14;border-bottom:1px solid #1a1a2e}
+.topbar h1{font-size:1.1rem;font-weight:700;color:#7c8aff;letter-spacing:.5px}
+.topbar .status{display:flex;align-items:center;gap:8px;font-size:.8rem;color:#888}
+.topbar .dot{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s}
+.topbar .dot.on{background:#4CAF50;box-shadow:0 0 6px #4CAF5088}
+.grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto auto auto;gap:12px;padding:12px;height:calc(100vh - 52px)}
+.panel{background:#0d0d14;border:1px solid #1a1a2e;border-radius:10px;padding:16px;overflow:hidden;box-shadow:0 0 12px #0004}
+.panel-title{font-size:.65rem;text-transform:uppercase;letter-spacing:2px;color:#555;margin-bottom:10px;font-weight:600}
+.panel.full{grid-column:1/-1}
+.mono{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace}
+.waveform-row{display:flex;gap:12px;height:100%}
+.waveform-col{flex:1;display:flex;flex-direction:column}
+.waveform-col .chart-label{font-size:.6rem;text-transform:uppercase;letter-spacing:1.5px;color:#444;margin-bottom:4px;font-weight:600}
+.waveform-col canvas{flex:1;width:100%;border-radius:6px;background:#08080e}
+.activity-display{display:flex;flex-direction:column;align-items:center;justify-content:center;height:calc(100% - 24px)}
+.activity-name{font-size:2.4rem;font-weight:800;transition:color .4s;text-align:center}
+.confidence-wrap{width:100%;max-width:260px;margin-top:14px}
+.confidence-bar-bg{width:100%;height:8px;background:#1a1a2e;border-radius:4px;overflow:hidden}
+.confidence-bar-fill{height:100%;border-radius:4px;transition:width .4s,background .4s;width:0}
+.confidence-text{font-size:.75rem;color:#666;margin-top:6px;text-align:center}
+.prob-list{display:flex;flex-direction:column;gap:8px;height:calc(100% - 24px);justify-content:center}
+.prob-row{display:flex;align-items:center;gap:10px}
+.prob-label{width:110px;font-size:.72rem;color:#aaa;text-align:right;flex-shrink:0}
+.prob-bar-bg{flex:1;height:18px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative}
+.prob-bar-fill{height:100%;border-radius:4px;transition:width .4s;width:0}
+.prob-pct{width:42px;font-size:.72rem;color:#777;text-align:left;flex-shrink:0}
+.timeline-strip{display:flex;gap:2px;align-items:flex-end;height:calc(100% - 24px);overflow:hidden}
+.timeline-block{flex:0 0 auto;width:18px;height:100%;border-radius:3px;transition:background .3s}
+.telemetry-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;height:calc(100% - 24px);align-content:center}
+.tel-item{text-align:center;padding:8px}
+.tel-item .tel-label{font-size:.6rem;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.tel-item .tel-value{font-size:1.3rem;font-weight:700;color:#7c8aff}
+.tel-item.wide{grid-column:1/-1}
+@media(max-width:900px){
+.grid{grid-template-columns:1fr;grid-template-rows:auto auto auto auto auto}
+.panel.full{grid-column:1}
+.waveform-row{flex-direction:column;height:auto}
+.waveform-col canvas{height:120px}
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+<h1>SensorFusion HAR Dashboard</h1>
+<div class="status">
+<div class="dot" id="connDot"></div>
+<span id="connLabel">Disconnected</span>
+</div>
+</div>
+<div class="grid">
+<div class="panel full" id="wavePanel" style="min-height:220px">
+<div class="panel-title">Live Waveforms</div>
+<div class="waveform-row">
+<div class="waveform-col">
+<div class="chart-label">Accelerometer (m/s²)</div>
+<canvas id="accelCanvas"></canvas>
+</div>
+<div class="waveform-col">
+<div class="chart-label">Gyroscope (rad/s)</div>
+<canvas id="gyroCanvas"></canvas>
+</div>
+</div>
+</div>
+<div class="panel" id="activityPanel">
+<div class="panel-title">Activity Prediction</div>
+<div class="activity-display">
+<div class="activity-name" id="activityName">—</div>
+<div class="confidence-wrap">
+<div class="confidence-bar-bg"><div class="confidence-bar-fill" id="confBar"></div></div>
+<div class="confidence-text mono" id="confText">0%</div>
+</div>
+</div>
+</div>
+<div class="panel" id="probPanel">
+<div class="panel-title">Probability Distribution</div>
+<div class="prob-list" id="probList"></div>
+</div>
+<div class="panel" id="timelinePanel">
+<div class="panel-title">Activity Timeline</div>
+<div class="timeline-strip" id="timelineStrip"></div>
+</div>
+<div class="panel" id="telemetryPanel">
+<div class="panel-title">System Telemetry</div>
+<div class="telemetry-grid">
+<div class="tel-item"><div class="tel-label">Sampling Rate</div><div class="tel-value mono" id="telRate">0 Hz</div></div>
+<div class="tel-item"><div class="tel-label">Buffer Fill</div><div class="tel-value mono" id="telBuffer">0/128</div></div>
+<div class="tel-item"><div class="tel-label">Inference Time</div><div class="tel-value mono" id="telInference">0 ms</div></div>
+<div class="tel-item"><div class="tel-label">Predictions</div><div class="tel-value mono" id="telPredictions">0</div></div>
+<div class="tel-item wide"><div class="tel-label">Connection Uptime</div><div class="tel-value mono" id="telUptime">00:00:00</div></div>
+</div>
+</div>
+</div>
+<script>
+(function(){
+var ACTIVITIES=["Walking","Walking Upstairs","Walking Downstairs","Sitting","Standing","Laying"];
+var COLORS={"Walking":"#4CAF50","Walking Upstairs":"#FF9800","Walking Downstairs":"#2196F3","Sitting":"#9C27B0","Standing":"#F44336","Laying":"#00BCD4"};
+var WINDOW=200;
+var TIMELINE_MAX=30;
+
+var ws=null;
+var reconnectTimer=null;
+var connStart=0;
+var uptimeInterval=null;
+var totalPredictions=0;
+
+var accelData={x:[],y:[],z:[]};
+var gyroData={x:[],y:[],z:[]};
+var timeline=[];
+var currentActivity="—";
+var currentConfidence=0;
+var probabilities={};
+
+var connDot=document.getElementById("connDot");
+var connLabel=document.getElementById("connLabel");
+var accelCanvas=document.getElementById("accelCanvas");
+var gyroCanvas=document.getElementById("gyroCanvas");
+var activityName=document.getElementById("activityName");
+var confBar=document.getElementById("confBar");
+var confText=document.getElementById("confText");
+var probList=document.getElementById("probList");
+var timelineStrip=document.getElementById("timelineStrip");
+var telRate=document.getElementById("telRate");
+var telBuffer=document.getElementById("telBuffer");
+var telInference=document.getElementById("telInference");
+var telPredictions=document.getElementById("telPredictions");
+var telUptime=document.getElementById("telUptime");
+
+var accelCtx=accelCanvas.getContext("2d");
+var gyroCtx=gyroCanvas.getContext("2d");
+
+function initProbList(){
+for(var i=0;i<ACTIVITIES.length;i++){
+var row=document.createElement("div");
+row.className="prob-row";
+var label=document.createElement("div");
+label.className="prob-label";
+label.textContent=ACTIVITIES[i];
+var barBg=document.createElement("div");
+barBg.className="prob-bar-bg";
+var barFill=document.createElement("div");
+barFill.className="prob-bar-fill";
+barFill.id="probFill_"+i;
+barFill.style.background=COLORS[ACTIVITIES[i]];
+barBg.appendChild(barFill);
+var pct=document.createElement("div");
+pct.className="prob-pct mono";
+pct.id="probPct_"+i;
+pct.textContent="0%";
+row.appendChild(label);
+row.appendChild(barBg);
+row.appendChild(pct);
+probList.appendChild(row);
+}
+}
+initProbList();
+
+function initTimeline(){
+timelineStrip.innerHTML="";
+for(var i=0;i<TIMELINE_MAX;i++){
+var block=document.createElement("div");
+block.className="timeline-block";
+block.style.background="#1a1a2e";
+block.id="tlBlock_"+i;
+timelineStrip.appendChild(block);
+}
+}
+initTimeline();
+
+function setConn(on){
+connDot.className=on?"dot on":"dot";
+connLabel.textContent=on?"Connected":"Disconnected";
+if(on){
+connStart=Date.now();
+if(!uptimeInterval){
+uptimeInterval=setInterval(updateUptime,1000);
+}
+}else{
+if(uptimeInterval){clearInterval(uptimeInterval);uptimeInterval=null;}
+}
+}
+
+function updateUptime(){
+var elapsed=Math.floor((Date.now()-connStart)/1000);
+var h=Math.floor(elapsed/3600);
+var m=Math.floor((elapsed%3600)/60);
+var s=elapsed%60;
+telUptime.textContent=(h<10?"0":"")+h+":"+(m<10?"0":"")+m+":"+(s<10?"0":"")+s;
+}
+
+function pushData(arr,val){
+arr.push(val);
+if(arr.length>WINDOW)arr.shift();
+}
+
+function resizeCanvas(canvas){
+var rect=canvas.parentElement.getBoundingClientRect();
+var cw=rect.width;
+var ch=canvas.parentElement.querySelector("canvas")===canvas?rect.height-20:rect.height-20;
+if(ch<60)ch=60;
+if(canvas.width!==Math.floor(cw*devicePixelRatio)||canvas.height!==Math.floor(ch*devicePixelRatio)){
+canvas.width=Math.floor(cw*devicePixelRatio);
+canvas.height=Math.floor(ch*devicePixelRatio);
+canvas.style.width=cw+"px";
+canvas.style.height=ch+"px";
+}
+}
+
+function drawChart(ctx,canvas,datasets,colors){
+resizeCanvas(canvas);
+var w=canvas.width;
+var h=canvas.height;
+var dpr=devicePixelRatio||1;
+
+ctx.clearRect(0,0,w,h);
+
+var allVals=[];
+for(var d=0;d<datasets.length;d++){
+for(var i=0;i<datasets[d].length;i++){
+allVals.push(datasets[d][i]);
+}
+}
+var minV=allVals.length?Math.min.apply(null,allVals):-1;
+var maxV=allVals.length?Math.max.apply(null,allVals):1;
+var range=maxV-minV;
+if(range<0.01)range=2;
+minV-=range*0.1;
+maxV+=range*0.1;
+range=maxV-minV;
+
+ctx.strokeStyle="#1a1a2e";
+ctx.lineWidth=dpr*0.5;
+for(var g=0;g<=4;g++){
+var gy=h-(g/4)*h;
+ctx.beginPath();
+ctx.moveTo(0,gy);
+ctx.lineTo(w,gy);
+ctx.stroke();
+}
+for(var g=0;g<=8;g++){
+var gx=(g/8)*w;
+ctx.beginPath();
+ctx.moveTo(gx,0);
+ctx.lineTo(gx,h);
+ctx.stroke();
+}
+
+ctx.strokeStyle="#333";
+ctx.lineWidth=dpr*0.5;
+var zeroY=h-((0-minV)/range)*h;
+if(zeroY>0&&zeroY<h){
+ctx.beginPath();
+ctx.moveTo(0,zeroY);
+ctx.lineTo(w,zeroY);
+ctx.stroke();
+}
+
+for(var d=0;d<datasets.length;d++){
+var data=datasets[d];
+if(data.length<2)continue;
+ctx.strokeStyle=colors[d];
+ctx.lineWidth=dpr*1.5;
+ctx.lineJoin="round";
+ctx.beginPath();
+for(var i=0;i<data.length;i++){
+var x=(i/(WINDOW-1))*w;
+var y=h-((data[i]-minV)/range)*h;
+if(i===0)ctx.moveTo(x,y);
+else ctx.lineTo(x,y);
+}
+ctx.stroke();
+}
+
+ctx.fillStyle="#555";
+ctx.font=(10*dpr)+"px monospace";
+ctx.textAlign="left";
+ctx.fillText(maxV.toFixed(1),4*dpr,12*dpr);
+ctx.fillText(minV.toFixed(1),4*dpr,h-4*dpr);
+}
+
+function render(){
+drawChart(accelCtx,accelCanvas,[accelData.x,accelData.y,accelData.z],["#F44336","#4CAF50","#2196F3"]);
+drawChart(gyroCtx,gyroCanvas,[gyroData.x,gyroData.y,gyroData.z],["#FF9800","#00BCD4","#E040FB"]);
+requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+function updateActivity(name,confidence){
+currentActivity=name||"—";
+currentConfidence=confidence||0;
+activityName.textContent=currentActivity;
+activityName.style.color=COLORS[currentActivity]||"#7c8aff";
+var pct=Math.round(currentConfidence*100);
+confBar.style.width=pct+"%";
+confBar.style.background=COLORS[currentActivity]||"#7c8aff";
+confText.textContent=pct+"%";
+}
+
+function updateProbabilities(probs){
+for(var i=0;i<ACTIVITIES.length;i++){
+var val=probs[ACTIVITIES[i]]||0;
+var pct=Math.round(val*100);
+var fill=document.getElementById("probFill_"+i);
+var pctEl=document.getElementById("probPct_"+i);
+if(fill)fill.style.width=pct+"%";
+if(pctEl)pctEl.textContent=pct+"%";
+}
+}
+
+function addTimeline(activity){
+timeline.push(activity);
+if(timeline.length>TIMELINE_MAX)timeline.shift();
+for(var i=0;i<TIMELINE_MAX;i++){
+var block=document.getElementById("tlBlock_"+i);
+if(!block)continue;
+if(i<timeline.length){
+block.style.background=COLORS[timeline[i]]||"#1a1a2e";
+block.title=timeline[i];
+}else{
+block.style.background="#1a1a2e";
+block.title="";
+}
+}
+}
+
+function connectWS(){
+if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
+try{
+ws=new WebSocket("ws://"+window.location.host+"/ws/dashboard");
+}catch(e){
+setConn(false);
+scheduleReconnect();
+return;
+}
+ws.onopen=function(){
+setConn(true);
+};
+ws.onclose=function(){
+setConn(false);
+scheduleReconnect();
+};
+ws.onerror=function(){
+try{ws.close();}catch(e){}
+};
+ws.onmessage=function(evt){
+try{
+var msg=JSON.parse(evt.data);
+if(msg.type==="sensor"||msg.sensor){
+var s=msg.sensor||msg;
+pushData(accelData.x,s.ax||0);
+pushData(accelData.y,s.ay||0);
+pushData(accelData.z,s.az||0);
+pushData(gyroData.x,s.gx||0);
+pushData(gyroData.y,s.gy||0);
+pushData(gyroData.z,s.gz||0);
+}
+if(msg.type==="prediction"||msg.activity){
+updateActivity(msg.activity,msg.confidence);
+if(msg.probabilities){
+updateProbabilities(msg.probabilities);
+}
+totalPredictions++;
+telPredictions.textContent=totalPredictions;
+addTimeline(msg.activity);
+}
+if(msg.telemetry){
+var t=msg.telemetry;
+if(t.sampling_rate!==undefined)telRate.textContent=t.sampling_rate+" Hz";
+if(t.buffer_fill!==undefined)telBuffer.textContent=t.buffer_fill+"/128";
+if(t.inference_time!==undefined)telInference.textContent=t.inference_time+" ms";
+}
+if(msg.sampling_rate!==undefined)telRate.textContent=msg.sampling_rate+" Hz";
+if(msg.buffer_fill!==undefined)telBuffer.textContent=msg.buffer_fill+"/128";
+if(msg.inference_time!==undefined)telInference.textContent=msg.inference_time+" ms";
+}catch(e){}
+};
+}
+
+function scheduleReconnect(){
+if(reconnectTimer)return;
+reconnectTimer=setTimeout(function(){
+reconnectTimer=null;
+connectWS();
+},2000);
+}
+
+connectWS();
+})();
+</script>
+</body>
+</html>

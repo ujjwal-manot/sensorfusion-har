@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>SensorFusion HAR — Phone</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0a0a0f;color:#e0e0e0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:16px;-webkit-user-select:none;user-select:none}
+.header{text-align:center;margin-bottom:12px}
+.header h1{font-size:1.3rem;font-weight:700;color:#7c8aff;letter-spacing:.5px}
+.header .sub{font-size:.7rem;color:#555;margin-top:2px}
+.status-bar{display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:.8rem}
+.status-dot{width:10px;height:10px;border-radius:50%;background:#555;transition:background .3s}
+.status-dot.connected{background:#4CAF50;box-shadow:0 0 8px #4CAF5088}
+.status-dot.streaming{background:#FF9800;box-shadow:0 0 8px #FF980088}
+.status-dot.disconnected{background:#F44336;box-shadow:0 0 8px #F4433688}
+.status-text{color:#aaa}
+#startBtn{width:100%;max-width:320px;padding:18px 0;border:none;border-radius:14px;font-size:1.1rem;font-weight:700;cursor:pointer;transition:all .2s;background:linear-gradient(135deg,#5c6bc0,#7c4dff);color:#fff;box-shadow:0 4px 20px #7c4dff44;margin-bottom:16px}
+#startBtn:active{transform:scale(.97);box-shadow:0 2px 10px #7c4dff44}
+#startBtn.active{background:linear-gradient(135deg,#c62828,#e53935);box-shadow:0 4px 20px #e5393544}
+.sensor-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:320px;margin-bottom:16px}
+.sensor-card{background:#12121a;border:1px solid #1e1e2e;border-radius:10px;padding:10px;text-align:center}
+.sensor-card .label{font-size:.6rem;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.sensor-card .value{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:1.1rem;font-weight:600;color:#e0e0e0}
+.sensor-section-title{font-size:.65rem;color:#444;text-transform:uppercase;letter-spacing:2px;margin:8px 0 4px;width:100%;max-width:320px;text-align:left;padding-left:4px}
+.prediction-box{width:100%;max-width:320px;background:#12121a;border:1px solid #1e1e2e;border-radius:14px;padding:16px;text-align:center;margin-bottom:12px}
+.prediction-box .pred-label{font-size:.65rem;color:#555;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+.prediction-box .pred-value{font-size:1.5rem;font-weight:700;color:#7c8aff;transition:color .3s}
+.counter{font-family:'SF Mono',SFMono-Regular,Consolas,monospace;font-size:.75rem;color:#444}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>SensorFusion HAR</h1>
+<div class="sub">Phone Sensor Streamer</div>
+</div>
+<div class="status-bar">
+<div class="status-dot" id="statusDot"></div>
+<span class="status-text" id="statusText">Disconnected</span>
+</div>
+<button id="startBtn">Start Streaming</button>
+<div class="prediction-box">
+<div class="pred-label">Current Activity</div>
+<div class="pred-value" id="predValue">—</div>
+</div>
+<div class="sensor-section-title">Accelerometer (m/s²)</div>
+<div class="sensor-grid">
+<div class="sensor-card"><div class="label">Accel X</div><div class="value" id="ax">0.000</div></div>
+<div class="sensor-card"><div class="label">Accel Y</div><div class="value" id="ay">0.000</div></div>
+<div class="sensor-card"><div class="label">Accel Z</div><div class="value" id="az">0.000</div></div>
+<div class="sensor-card"><div class="label">Samples</div><div class="value" id="sampleCount">0</div></div>
+</div>
+<div class="sensor-section-title">Gyroscope (rad/s)</div>
+<div class="sensor-grid">
+<div class="sensor-card"><div class="label">Gyro X</div><div class="value" id="gx">0.000</div></div>
+<div class="sensor-card"><div class="label">Gyro Y</div><div class="value" id="gy">0.000</div></div>
+<div class="sensor-card"><div class="label">Gyro Z</div><div class="value" id="gz">0.000</div></div>
+<div class="sensor-card"><div class="label">Rate (Hz)</div><div class="value" id="rateHz">0</div></div>
+</div>
+<div class="counter" id="connInfo"></div>
+<script>
+(function(){
+var ws=null;
+var streaming=false;
+var sampleCount=0;
+var rateCount=0;
+var rateTs=0;
+var reconnectTimer=null;
+var activityColors={
+"Walking":"#4CAF50",
+"Walking Upstairs":"#FF9800",
+"Walking Downstairs":"#2196F3",
+"Sitting":"#9C27B0",
+"Standing":"#F44336",
+"Laying":"#00BCD4"
+};
+
+var btn=document.getElementById("startBtn");
+var statusDot=document.getElementById("statusDot");
+var statusText=document.getElementById("statusText");
+var predValue=document.getElementById("predValue");
+var sampleCountEl=document.getElementById("sampleCount");
+var rateHzEl=document.getElementById("rateHz");
+var axEl=document.getElementById("ax");
+var ayEl=document.getElementById("ay");
+var azEl=document.getElementById("az");
+var gxEl=document.getElementById("gx");
+var gyEl=document.getElementById("gy");
+var gzEl=document.getElementById("gz");
+
+function setStatus(state,text){
+statusDot.className="status-dot "+state;
+statusText.textContent=text;
+}
+
+function fmt(v){
+if(v===null||v===undefined)return"0.000";
+return v.toFixed(3);
+}
+
+function connectWS(){
+if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
+try{
+ws=new WebSocket("ws://"+window.location.host+"/ws/phone");
+}catch(e){
+setStatus("disconnected","Connection Failed");
+scheduleReconnect();
+return;
+}
+ws.onopen=function(){
+setStatus("connected","Connected");
+if(streaming)setStatus("streaming","Streaming");
+};
+ws.onclose=function(){
+setStatus("disconnected","Disconnected");
+scheduleReconnect();
+};
+ws.onerror=function(){
+try{ws.close();}catch(e){}
+};
+ws.onmessage=function(evt){
+try{
+var msg=JSON.parse(evt.data);
+if(msg.activity){
+predValue.textContent=msg.activity;
+predValue.style.color=activityColors[msg.activity]||"#7c8aff";
+}
+}catch(e){}
+};
+}
+
+function scheduleReconnect(){
+if(reconnectTimer)return;
+reconnectTimer=setTimeout(function(){
+reconnectTimer=null;
+connectWS();
+},2000);
+}
+
+function onMotion(e){
+if(!streaming)return;
+if(!ws||ws.readyState!==WebSocket.OPEN)return;
+
+var accel=e.acceleration;
+var ax=0,ay=0,az=0;
+if(accel&&accel.x!==null&&accel.x!==undefined){
+ax=accel.x;ay=accel.y;az=accel.z;
+}else if(e.accelerationIncludingGravity){
+var ag=e.accelerationIncludingGravity;
+ax=ag.x||0;ay=ag.y||0;az=ag.z||0;
+}
+
+var rot=e.rotationRate;
+var gxv=0,gyv=0,gzv=0;
+if(rot){
+gxv=rot.alpha||0;gyv=rot.beta||0;gzv=rot.gamma||0;
+}
+
+var payload={
+ax:ax,ay:ay,az:az,
+gx:gxv,gy:gyv,gz:gzv,
+t:Date.now()
+};
+
+try{ws.send(JSON.stringify(payload));}catch(e){}
+
+sampleCount++;
+sampleCountEl.textContent=sampleCount;
+axEl.textContent=fmt(ax);
+ayEl.textContent=fmt(ay);
+azEl.textContent=fmt(az);
+gxEl.textContent=fmt(gxv);
+gyEl.textContent=fmt(gyv);
+gzEl.textContent=fmt(gzv);
+
+rateCount++;
+var now=performance.now();
+if(now-rateTs>=1000){
+rateHzEl.textContent=rateCount;
+rateCount=0;
+rateTs=now;
+}
+}
+
+function startStreaming(){
+streaming=true;
+btn.textContent="Stop Streaming";
+btn.classList.add("active");
+window.addEventListener("devicemotion",onMotion,true);
+if(ws&&ws.readyState===WebSocket.OPEN){
+setStatus("streaming","Streaming");
+}
+rateTs=performance.now();
+rateCount=0;
+}
+
+function stopStreaming(){
+streaming=false;
+btn.textContent="Start Streaming";
+btn.classList.remove("active");
+window.removeEventListener("devicemotion",onMotion,true);
+if(ws&&ws.readyState===WebSocket.OPEN){
+setStatus("connected","Connected");
+}else{
+setStatus("disconnected","Disconnected");
+}
+}
+
+btn.addEventListener("click",function(){
+if(streaming){
+stopStreaming();
+return;
+}
+
+if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function"){
+DeviceOrientationEvent.requestPermission().then(function(state){
+if(state==="granted"){
+if(typeof DeviceMotionEvent!=="undefined"&&typeof DeviceMotionEvent.requestPermission==="function"){
+DeviceMotionEvent.requestPermission().then(function(s2){
+if(s2==="granted"){
+connectWS();
+startStreaming();
+}
+}).catch(function(){});
+}else{
+connectWS();
+startStreaming();
+}
+}
+}).catch(function(){});
+}else if(typeof DeviceMotionEvent!=="undefined"&&typeof DeviceMotionEvent.requestPermission==="function"){
+DeviceMotionEvent.requestPermission().then(function(state){
+if(state==="granted"){
+connectWS();
+startStreaming();
+}
+}).catch(function(){});
+}else{
+connectWS();
+startStreaming();
+}
+});
+
+connectWS();
+})();
+</script>
+</body>
+</html>
