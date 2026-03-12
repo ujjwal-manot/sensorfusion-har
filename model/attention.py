@@ -6,7 +6,7 @@ __all__ = ["PatchMicroAttention"]
 
 class PatchMicroAttention(nn.Module):
 
-    def __init__(self, in_channels=128, seq_len=32, num_patches=8, d_model=64, num_heads=2, ff_dim=128):
+    def __init__(self, in_channels=48, seq_len=32, num_patches=8, d_model=32, num_heads=2, ff_dim=48):
         super().__init__()
         self.num_patches = num_patches
         self.patch_size = seq_len // num_patches

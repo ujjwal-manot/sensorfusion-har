@@ -6,7 +6,7 @@ __all__ = ["EchoStateNetwork"]
 
 class EchoStateNetwork(nn.Module):
 
-    def __init__(self, input_channels=6, reservoir_size=64, spectral_radius=0.9, sparsity=0.8):
+    def __init__(self, input_channels=6, reservoir_size=32, spectral_radius=0.9, sparsity=0.8):
         super().__init__()
         self.reservoir_size = reservoir_size
 

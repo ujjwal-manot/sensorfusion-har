@@ -82,7 +82,7 @@ def load_data(args, device):
         with open(stats_path) as f:
             norm_stats = json.load(f)
     else:
-        checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
+        checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
         norm_stats = checkpoint.get("normalization_stats", None)
         if norm_stats is None:
             print("WARNING: No normalization stats found. Computing from training set...")
@@ -142,10 +142,10 @@ class NoReservoirModel(nn.Module):
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
         from model.binary_head import BinaryClassifier
-        self.input_proj = nn.Linear(6, 64)
-        self.dsconv = DSConvEncoder(in_channels=64)
-        self.attention = PatchMicroAttention(in_channels=128, seq_len=32)
-        self.classifier = BinaryClassifier(in_features=64, num_classes=6)
+        self.input_proj = nn.Linear(6, 32)
+        self.dsconv = DSConvEncoder(in_channels=32)
+        self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
+        self.classifier = BinaryClassifier(in_features=32, num_classes=6)
 
     def forward(self, x):
         x = self.input_proj(x)
@@ -166,10 +166,10 @@ class NoAttentionModel(nn.Module):
         from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
         from model.binary_head import BinaryClassifier
-        self.reservoir = EchoStateNetwork(6, 64)
-        self.dsconv = DSConvEncoder(in_channels=64)
+        self.reservoir = EchoStateNetwork(6, 32)
+        self.dsconv = DSConvEncoder(in_channels=32)
         self.pool = nn.AdaptiveAvgPool1d(1)
-        self.classifier = BinaryClassifier(in_features=128, num_classes=6)
+        self.classifier = BinaryClassifier(in_features=48, num_classes=6)
 
     def forward(self, x):
         x = self.reservoir(x)
@@ -190,11 +190,11 @@ class NoBinaryHeadModel(nn.Module):
         from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
-        self.reservoir = EchoStateNetwork(6, 64)
-        self.dsconv = DSConvEncoder(in_channels=64)
-        self.attention = PatchMicroAttention(in_channels=128, seq_len=32)
-        self.bn = nn.BatchNorm1d(64)
-        self.head = nn.Linear(64, 6)
+        self.reservoir = EchoStateNetwork(6, 32)
+        self.dsconv = DSConvEncoder(in_channels=32)
+        self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
+        self.bn = nn.BatchNorm1d(32)
+        self.head = nn.Linear(32, 6)
 
     def forward(self, x):
         x = self.reservoir(x)
@@ -215,20 +215,20 @@ class NoDSConvModel(nn.Module):
         from model.reservoir import EchoStateNetwork
         from model.attention import PatchMicroAttention
         from model.binary_head import BinaryClassifier
-        self.reservoir = EchoStateNetwork(6, 64)
+        self.reservoir = EchoStateNetwork(6, 32)
         self.conv = nn.Sequential(
-            nn.Conv1d(64, 128, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm1d(128),
+            nn.Conv1d(32, 48, kernel_size=5, stride=1, padding=2),
+            nn.BatchNorm1d(48),
             nn.ReLU(inplace=True),
-            nn.Conv1d(128, 128, kernel_size=5, stride=2, padding=2),
-            nn.BatchNorm1d(128),
+            nn.Conv1d(48, 48, kernel_size=5, stride=2, padding=2),
+            nn.BatchNorm1d(48),
             nn.ReLU(inplace=True),
-            nn.Conv1d(128, 128, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm1d(128),
+            nn.Conv1d(48, 48, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(48),
             nn.ReLU(inplace=True),
         )
-        self.attention = PatchMicroAttention(in_channels=128, seq_len=32)
-        self.classifier = BinaryClassifier(in_features=64, num_classes=6)
+        self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
+        self.classifier = BinaryClassifier(in_features=32, num_classes=6)
 
     def forward(self, x):
         x = self.reservoir(x)
@@ -360,7 +360,7 @@ def main():
 
     print("Loading model from {}".format(args.checkpoint))
     model = SensorFusionHAR(input_channels=6, reservoir_size=64, num_classes=6).to(device)
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     print("Model: SensorFusionHAR")

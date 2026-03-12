@@ -19,7 +19,7 @@ class BinaryLinear(nn.Module):
 
 class BinaryClassifier(nn.Module):
 
-    def __init__(self, in_features=64, num_classes=6):
+    def __init__(self, in_features=32, num_classes=6):
         super().__init__()
         self.bn = nn.BatchNorm1d(in_features)
         self.head = BinaryLinear(in_features, num_classes)

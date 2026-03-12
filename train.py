@@ -166,7 +166,7 @@ def main():
     print("Best test accuracy: {:.2f}%".format(best_acc * 100))
     print("Best model saved to: {}".format(best_path))
 
-    checkpoint = torch.load(best_path, map_location=device, weights_only=True)
+    checkpoint = torch.load(best_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     _, final_acc, final_f1, final_f1_per_class, final_preds, final_labels = eval_epoch(
         model, test_loader, criterion, device

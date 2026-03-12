@@ -98,9 +98,10 @@ Activities: Walking, Walking Upstairs, Walking Downstairs, Sitting, Standing, La
 |---|---|
 | Accuracy | TBD |
 | F1 Macro | TBD |
-| Model Size | ~22 KB |
-| Inference Time | <50ms |
-| Parameters | ~110K trainable |
+| Model Size (INT8) | ~21 KB |
+| Model Size (FP32) | ~83 KB |
+| Inference Time | <10ms |
+| Parameters | ~21K trainable |
 
 ## Ablation Study
 

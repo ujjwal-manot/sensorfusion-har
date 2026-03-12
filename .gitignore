@@ -8,8 +8,8 @@ build/
 *.pt
 *.pth
 *.onnx
-data/UCI_HAR_Dataset/
-data/*.zip
+data/
+checkpoints/*.pt
 .env
 venv/
 .venv/
