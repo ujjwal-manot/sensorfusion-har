@@ -11,14 +11,16 @@ import numpy as np
 
 from model import SensorFusionHAR
 from model.dataset import UCIHARDataset
+from model.dataset_pamap2 import PAMAP2Dataset, ACTIVITY_NAMES as PAMAP2_LABELS
 
 
-ACTIVITY_LABELS = ["WALKING", "WALKING_UP", "WALKING_DOWN", "SITTING", "STANDING", "LAYING"]
+UCIHAR_LABELS = ["WALKING", "WALKING_UP", "WALKING_DOWN", "SITTING", "STANDING", "LAYING"]
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="data/UCI HAR Dataset")
+    parser.add_argument("--dataset", type=str, default="ucihar", choices=["ucihar", "pamap2"])
+    parser.add_argument("--data_dir", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -31,6 +33,14 @@ def get_device(device_arg):
     if device_arg == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(device_arg)
+
+
+def get_dataset_config(args):
+    if args.dataset == "pamap2":
+        data_dir = args.data_dir or "data/PAMAP2_Dataset"
+        return data_dir, PAMAP2Dataset, PAMAP2_LABELS, 12
+    data_dir = args.data_dir or "data/UCI HAR Dataset"
+    return data_dir, UCIHARDataset, UCIHAR_LABELS, 6
 
 
 def train_epoch(model, loader, criterion, optimizer, device):
@@ -73,13 +83,14 @@ def eval_epoch(model, loader, criterion, device):
     return total_loss / len(all_labels), acc, f1_macro, f1_per_class, all_preds, all_labels
 
 
-def print_confusion_matrix(y_true, y_pred):
+def print_confusion_matrix(y_true, y_pred, labels):
     cm = confusion_matrix(y_true, y_pred)
-    header = "          " + "".join("{:>10s}".format(ACTIVITY_LABELS[i][:8]) for i in range(len(ACTIVITY_LABELS)))
+    trunc = [l[:10] for l in labels]
+    header = "          " + "".join("{:>12s}".format(t) for t in trunc)
     print(header)
     for i in range(cm.shape[0]):
-        row = "{:<10s}".format(ACTIVITY_LABELS[i][:8])
-        row += "".join("{:>10d}".format(cm[i, j]) for j in range(cm.shape[1]))
+        row = "{:<10s}".format(trunc[i])
+        row += "".join("{:>12d}".format(cm[i, j]) for j in range(cm.shape[1]))
         print(row)
 
 
@@ -88,23 +99,25 @@ def main():
     device = get_device(args.device)
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-    if not os.path.isdir(args.data_dir):
-        print("Dataset not found at {}. Downloading...".format(args.data_dir))
-        parent = os.path.dirname(args.data_dir) or "."
-        extracted = UCIHARDataset.download(parent)
+    data_dir, DatasetCls, activity_labels, num_classes = get_dataset_config(args)
+
+    if not os.path.isdir(data_dir):
+        print("Dataset not found at {}. Downloading...".format(data_dir))
+        parent = os.path.dirname(data_dir) or "."
+        extracted = DatasetCls.download(parent)
         if os.path.isdir(extracted):
-            args.data_dir = extracted
-        if not os.path.isdir(args.data_dir):
-            print("ERROR: Could not find dataset at {}".format(args.data_dir))
+            data_dir = extracted
+        if not os.path.isdir(data_dir):
+            print("ERROR: Could not find dataset at {}".format(data_dir))
             return
 
-    print("Loading datasets...")
-    train_ds = UCIHARDataset(args.data_dir, split="train")
-    test_ds = UCIHARDataset(args.data_dir, split="test")
+    print("Loading {} dataset...".format(args.dataset.upper()))
+    train_ds = DatasetCls(data_dir, split="train")
+    test_ds = DatasetCls(data_dir, split="test")
     print("Train samples: {}  Test samples: {}".format(len(train_ds), len(test_ds)))
 
     print("Computing normalization stats...")
-    means, stds = UCIHARDataset.get_normalization_stats(args.data_dir)
+    means, stds = DatasetCls.get_normalization_stats(data_dir)
     norm_stats = {"means": means, "stds": stds}
     stats_path = os.path.join(args.checkpoint_dir, "normalization_stats.json")
     with open(stats_path, "w") as f:
@@ -119,10 +132,10 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
 
-    model = SensorFusionHAR(input_channels=6, reservoir_size=64, num_classes=6).to(device)
+    model = SensorFusionHAR(input_channels=6, reservoir_size=32, num_classes=num_classes).to(device)
     param_count = model.count_parameters()
     model_kb = model.model_size_kb()
-    print("\nModel: SensorFusionHAR")
+    print("\nModel: SensorFusionHAR ({} classes)".format(num_classes))
     print("Parameters: {:,}".format(param_count))
     print("Model size: {:.2f} KB".format(model_kb))
     print("Device: {}\n".format(device))
@@ -159,6 +172,9 @@ def main():
                 "accuracy": test_acc,
                 "f1_macro": f1_macro,
                 "normalization_stats": norm_stats,
+                "dataset": args.dataset,
+                "num_classes": num_classes,
+                "activity_labels": activity_labels,
             }, best_path)
 
     print("\n" + "=" * 66)
@@ -176,11 +192,11 @@ def main():
     print("Accuracy: {:.2f}%".format(final_acc * 100))
     print("F1 Macro: {:.4f}".format(final_f1))
     print("\nPer-class F1:")
-    for i, label in enumerate(ACTIVITY_LABELS):
-        print("  {:<16s} {:.4f}".format(label, final_f1_per_class[i]))
+    for i, label in enumerate(activity_labels):
+        print("  {:<20s} {:.4f}".format(label, final_f1_per_class[i]))
 
     print("\nConfusion Matrix:")
-    print_confusion_matrix(final_labels, final_preds)
+    print_confusion_matrix(final_labels, final_preds, activity_labels)
     print("\nModel size: {:.2f} KB ({:,} parameters)".format(model_kb, param_count))
 
 

@@ -1,51 +1,66 @@
 # SensorFusion-HAR
 
-A lightweight real-time Human Activity Recognition system using a novel 4-stage pipeline -- reservoir computing, depthwise separable convolutions, patch micro-attention, and binary quantization -- achieving 94%+ accuracy in ~22KB.
+A lightweight real-time Human Activity Recognition system using a novel 4-stage pipeline -- reservoir computing, depthwise separable convolutions, patch micro-attention, and binary quantization -- targeting sub-10ms latency in ~21KB (INT8).
 
 ## Architecture
 
-SensorFusion-HAR combines four distinct computational paradigms into a single inference pipeline:
+SensorFusion-HAR combines four computational paradigms into a single inference pipeline:
 
-1. **Echo State Network (ESN):** A fixed random reservoir that expands 6-channel MEMS input into a 64-dimensional feature space. The reservoir weights are never trained -- only the projection is learned -- making this stage parameter-free during backpropagation.
+1. **Echo State Network (ESN):** A fixed random reservoir that expands 6-channel MEMS input into a 32-dimensional feature space. The reservoir weights are never trained, making this stage parameter-free during backpropagation.
 
-2. **Depthwise Separable 1D-CNN:** Three stacked DS-Conv1D blocks extract spatial features from the reservoir output. Depthwise separable factorization reduces the parameter count by roughly 8x compared to standard convolutions at equivalent channel depth.
+2. **Depthwise Separable 1D-CNN:** Three stacked DS-Conv1D blocks (32->48->48->48 channels) extract spatial features from the reservoir output. Depthwise separable factorization reduces the parameter count by roughly 8x compared to standard convolutions at equivalent channel depth.
 
-3. **Patch Micro-Attention:** The temporal sequence is split into fixed-size patches, and self-attention is computed within each patch independently. This yields the representational benefits of attention at approximately 128x lower cost than full-sequence attention.
+3. **Patch Micro-Attention:** The temporal sequence is split into 8 fixed-size patches, and multi-head self-attention (2 heads, d_model=32) is computed across patches. This yields the representational benefits of attention at approximately 128x lower cost than full-sequence attention.
 
-4. **Binary Quantized Head:** The classification head uses +1/-1 weights trained via the Straight-Through Estimator (STE). At inference, all multiply-accumulate operations in this stage reduce to additions and subtractions, and the weight matrix compresses to ~48 bytes.
+4. **Binary Quantized Head:** The classification head uses +1/-1 weights trained via the Straight-Through Estimator (STE). At inference, all multiply-accumulate operations in this stage reduce to additions and subtractions.
 
 ```
-Input (128x6) -> [ESN] -> [DS-Conv1D x3] -> [Patch Attention] -> [Binary Head] -> 6 classes
-     MEMS sensors   64-dim reservoir   128-ch features    64-dim pooled      ~48 bytes
+Input (128x6) -> [ESN] -> [DS-Conv1D x3] -> [Patch Attention] -> [Binary Head] -> N classes
+     MEMS sensors   32-dim reservoir   48-ch features    32-dim pooled      N outputs
 ```
 
-## Key Features
+## Features
 
-- Real-time inference with sub-50ms latency on CPU
-- ~22KB quantized model size
+- Real-time inference with sub-10ms latency on CPU
+- ~21KB INT8 quantized model size
+- Dual dataset support: UCI-HAR (6 classes) and PAMAP2 (12 complex activities)
+- 7 sensor data augmentation methods (jitter, scaling, rotation, permutation, time warp, magnitude warp, channel dropout)
+- SimCLR contrastive pre-training for improved representations
+- LOSO (Leave-One-Subject-Out) cross-validation
+- Cross-dataset transfer evaluation
 - Phone-to-laptop sensor streaming via WebSocket
-- Browser-based sensor access (no native app required)
-- Live dashboard with waveform visualization
-- Ablation study framework included
+- Browser-based sensor access using DeviceMotion API
+- Live dashboard with waveform visualization and activity timeline
+- t-SNE feature visualization at each pipeline stage
+- Attention map visualization
+- Noise robustness analysis across SNR levels
+- Confidence calibration with ECE measurement
+- ONNX export for deployment
+- Full ablation study framework
 
 ## Project Structure
 
 ```
 sensorfusion-har/
 ├── model/
-│   ├── reservoir.py          # Echo State Network
-│   ├── dsconv.py             # Depthwise Separable Conv1D
-│   ├── attention.py          # Patch Micro-Attention
-│   ├── binary_head.py        # Binary Quantized Classifier
-│   ├── sensorfusion.py       # Full pipeline
-│   └── dataset.py            # UCI-HAR dataset loader
+│   ├── reservoir.py
+│   ├── dsconv.py
+│   ├── attention.py
+│   ├── binary_head.py
+│   ├── sensorfusion.py
+│   ├── dataset.py
+│   ├── dataset_pamap2.py
+│   ├── augmentation.py
+│   ├── contrastive.py
+│   ├── visualize.py
+│   └── __init__.py
 ├── static/
-│   ├── phone.html            # Phone sensor streaming page
-│   └── dashboard.html        # Real-time dashboard
-├── server.py                 # FastAPI WebSocket server
-├── train.py                  # Training script
-├── evaluate.py               # Evaluation + ablation + benchmark
-├── sensorfusion_har.ipynb    # Jupyter notebook (full pipeline)
+│   ├── phone.html
+│   └── dashboard.html
+├── server.py
+├── train.py
+├── evaluate.py
+├── sensorfusion_har.ipynb
 ├── requirements.txt
 └── README.md
 ```
@@ -63,17 +78,19 @@ pip install -r requirements.txt
 ### Training
 
 ```bash
-python train.py --epochs 100 --batch_size 64 --lr 0.001
+python train.py --dataset ucihar --epochs 100 --batch_size 64 --lr 0.001
+python train.py --dataset pamap2 --epochs 100 --batch_size 64 --lr 0.001
 ```
 
-The UCI-HAR dataset is downloaded automatically on first run.
+Datasets are downloaded automatically on first run.
 
 ### Evaluation
 
 ```bash
-python evaluate.py
-python evaluate.py --ablation
-python evaluate.py --benchmark
+python evaluate.py --dataset ucihar
+python evaluate.py --dataset pamap2
+python evaluate.py --ablation --ablation_epochs 50
+python evaluate.py --benchmark --benchmark_runs 1000
 ```
 
 ### Live Demo
@@ -82,40 +99,42 @@ python evaluate.py --benchmark
 python server.py
 ```
 
-- Open the dashboard on your laptop: `http://localhost:8765`
-- Open the phone sensor page: `http://<your-ip>:8765/phone`
-- Both devices must be connected to the same WiFi network.
+- Dashboard on laptop: `http://localhost:8765`
+- Phone sensor page: `http://<your-ip>:8765/phone`
+- Both devices must be on the same network.
 
-## Dataset
+### Jupyter Notebook
 
-**UCI-HAR** (Human Activity Recognition Using Smartphones): 6 activities recorded from 30 subjects, producing over 10,000 windows of 128 timesteps across 6 channels (3-axis accelerometer + 3-axis gyroscope).
+The notebook `sensorfusion_har.ipynb` contains the complete pipeline: dataset exploration, augmentation demo, model summary, training with augmentation, evaluation with confusion matrix, ablation study, t-SNE visualization, attention maps, noise robustness, confidence calibration, SimCLR contrastive pre-training, LOSO evaluation, cross-dataset transfer, baseline comparison with Pareto plot, ONNX export, and inference benchmark.
 
-Activities: Walking, Walking Upstairs, Walking Downstairs, Sitting, Standing, Laying.
+## Datasets
 
-## Results
+**UCI-HAR:** 6 activities (Walking, Walking Upstairs, Walking Downstairs, Sitting, Standing, Laying) from 30 subjects, 128 timesteps x 6 channels (3-axis accelerometer + 3-axis gyroscope).
+
+**PAMAP2:** 12 activities (Lying, Sitting, Standing, Walking, Running, Cycling, Nordic Walking, Ascending Stairs, Descending Stairs, Vacuum Cleaning, Ironing, Rope Jumping) from 9 subjects, 128 timesteps x 6 channels at 100Hz.
+
+## Model Specifications
 
 | Metric | Value |
 |---|---|
-| Accuracy | TBD |
-| F1 Macro | TBD |
-| Model Size (INT8) | ~21 KB |
+| Trainable Parameters | ~21K |
 | Model Size (FP32) | ~83 KB |
-| Inference Time | <10ms |
-| Parameters | ~21K trainable |
+| Model Size (INT8) | ~21 KB |
+| Inference Latency | <10 ms (CPU) |
+| Input Shape | (batch, 128, 6) |
+| Output | N-class logits |
 
-## Ablation Study
+## Ablation Variants
 
-| Configuration | Accuracy | Size |
-|---|---|---|
-| Full pipeline | TBD | ~22 KB |
-| Without ESN | TBD | TBD |
-| Without Patch Attention | TBD | TBD |
-| Without Binary Quantization | TBD | TBD |
-| Standard Conv (no DS) | TBD | TBD |
+| Configuration | Description |
+|---|---|
+| Full Pipeline | ESN + DS-Conv + Attention + Binary Head |
+| No Reservoir | Linear projection replaces ESN |
+| No Attention | Global average pooling replaces patch attention |
+| No Binary Head | Standard linear layer replaces binary classifier |
+| No DS-Conv | Standard Conv1D replaces depthwise separable blocks |
 
 ## Citation
-
-If you use this work, please cite:
 
 ```bibtex
 @article{sensorfusionhar2026,

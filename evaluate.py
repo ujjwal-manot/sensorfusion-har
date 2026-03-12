@@ -12,15 +12,17 @@ import numpy as np
 
 from model import SensorFusionHAR
 from model.dataset import UCIHARDataset
+from model.dataset_pamap2 import PAMAP2Dataset, ACTIVITY_NAMES as PAMAP2_LABELS
 from model.dsconv import DSConvEncoder
 
 
-ACTIVITY_LABELS = ["WALKING", "WALKING_UP", "WALKING_DOWN", "SITTING", "STANDING", "LAYING"]
+UCIHAR_LABELS = ["WALKING", "WALKING_UP", "WALKING_DOWN", "SITTING", "STANDING", "LAYING"]
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="data/UCI HAR Dataset")
+    parser.add_argument("--dataset", type=str, default="ucihar", choices=["ucihar", "pamap2"])
+    parser.add_argument("--data_dir", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best_model.pt")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--device", type=str, default="auto")
@@ -30,6 +32,14 @@ def parse_args():
     parser.add_argument("--benchmark", action="store_true")
     parser.add_argument("--benchmark_runs", type=int, default=1000)
     return parser.parse_args()
+
+
+def get_dataset_config(args):
+    if args.dataset == "pamap2":
+        data_dir = args.data_dir or "data/PAMAP2_Dataset"
+        return data_dir, PAMAP2Dataset, PAMAP2_LABELS, 12
+    data_dir = args.data_dir or "data/UCI HAR Dataset"
+    return data_dir, UCIHARDataset, UCIHAR_LABELS, 6
 
 
 def get_device(device_arg):
@@ -56,27 +66,28 @@ def evaluate(model, loader, device):
     return acc, f1_macro, f1_per_class, all_preds, all_labels
 
 
-def print_confusion_matrix(y_true, y_pred):
+def print_confusion_matrix(y_true, y_pred, label_names):
     cm = confusion_matrix(y_true, y_pred)
-    header = "          " + "".join("{:>10s}".format(ACTIVITY_LABELS[i][:8]) for i in range(len(ACTIVITY_LABELS)))
+    trunc = [l[:10] for l in label_names]
+    header = "          " + "".join("{:>12s}".format(t) for t in trunc)
     print(header)
     for i in range(cm.shape[0]):
-        row = "{:<10s}".format(ACTIVITY_LABELS[i][:8])
-        row += "".join("{:>10d}".format(cm[i, j]) for j in range(cm.shape[1]))
+        row = "{:<10s}".format(trunc[i])
+        row += "".join("{:>12d}".format(cm[i, j]) for j in range(cm.shape[1]))
         print(row)
 
 
-def print_results(acc, f1_macro, f1_per_class, preds, labels):
+def print_results(acc, f1_macro, f1_per_class, preds, labels, label_names):
     print("Accuracy: {:.2f}%".format(acc * 100))
     print("F1 Macro: {:.4f}".format(f1_macro))
     print("\nPer-class F1:")
-    for i, label in enumerate(ACTIVITY_LABELS):
-        print("  {:<16s} {:.4f}".format(label, f1_per_class[i]))
+    for i, label in enumerate(label_names):
+        print("  {:<20s} {:.4f}".format(label, f1_per_class[i]))
     print("\nConfusion Matrix:")
-    print_confusion_matrix(labels, preds)
+    print_confusion_matrix(labels, preds, label_names)
 
 
-def load_data(args, device):
+def load_data(args, device, DatasetCls, data_dir):
     stats_path = os.path.join(os.path.dirname(args.checkpoint), "normalization_stats.json")
     if os.path.exists(stats_path):
         with open(stats_path) as f:
@@ -86,18 +97,18 @@ def load_data(args, device):
         norm_stats = checkpoint.get("normalization_stats", None)
         if norm_stats is None:
             print("WARNING: No normalization stats found. Computing from training set...")
-            means, stds = UCIHARDataset.get_normalization_stats(args.data_dir)
+            means, stds = DatasetCls.get_normalization_stats(data_dir)
             norm_stats = {"means": means, "stds": stds}
 
-    test_ds = UCIHARDataset(args.data_dir, split="test")
+    test_ds = DatasetCls(data_dir, split="test")
     mean_t = torch.tensor(norm_stats["means"], dtype=torch.float32)
     std_t = torch.tensor(norm_stats["stds"], dtype=torch.float32)
     test_ds.X = (test_ds.X - mean_t) / std_t
     return test_ds, norm_stats
 
 
-def load_train_data(args, norm_stats):
-    train_ds = UCIHARDataset(args.data_dir, split="train")
+def load_train_data(DatasetCls, data_dir, norm_stats):
+    train_ds = DatasetCls(data_dir, split="train")
     mean_t = torch.tensor(norm_stats["means"], dtype=torch.float32)
     std_t = torch.tensor(norm_stats["stds"], dtype=torch.float32)
     train_ds.X = (train_ds.X - mean_t) / std_t
@@ -137,7 +148,7 @@ def train_variant(model, train_loader, test_loader, epochs, lr, device):
 
 class NoReservoirModel(nn.Module):
 
-    def __init__(self):
+    def __init__(self, num_classes=6):
         super().__init__()
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
@@ -145,7 +156,7 @@ class NoReservoirModel(nn.Module):
         self.input_proj = nn.Linear(6, 32)
         self.dsconv = DSConvEncoder(in_channels=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
-        self.classifier = BinaryClassifier(in_features=32, num_classes=6)
+        self.classifier = BinaryClassifier(in_features=32, num_classes=num_classes)
 
     def forward(self, x):
         x = self.input_proj(x)
@@ -161,7 +172,7 @@ class NoReservoirModel(nn.Module):
 
 class NoAttentionModel(nn.Module):
 
-    def __init__(self):
+    def __init__(self, num_classes=6):
         super().__init__()
         from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
@@ -169,7 +180,7 @@ class NoAttentionModel(nn.Module):
         self.reservoir = EchoStateNetwork(6, 32)
         self.dsconv = DSConvEncoder(in_channels=32)
         self.pool = nn.AdaptiveAvgPool1d(1)
-        self.classifier = BinaryClassifier(in_features=48, num_classes=6)
+        self.classifier = BinaryClassifier(in_features=48, num_classes=num_classes)
 
     def forward(self, x):
         x = self.reservoir(x)
@@ -185,7 +196,7 @@ class NoAttentionModel(nn.Module):
 
 class NoBinaryHeadModel(nn.Module):
 
-    def __init__(self):
+    def __init__(self, num_classes=6):
         super().__init__()
         from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
@@ -194,7 +205,7 @@ class NoBinaryHeadModel(nn.Module):
         self.dsconv = DSConvEncoder(in_channels=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.bn = nn.BatchNorm1d(32)
-        self.head = nn.Linear(32, 6)
+        self.head = nn.Linear(32, num_classes)
 
     def forward(self, x):
         x = self.reservoir(x)
@@ -210,7 +221,7 @@ class NoBinaryHeadModel(nn.Module):
 
 class NoDSConvModel(nn.Module):
 
-    def __init__(self):
+    def __init__(self, num_classes=6):
         super().__init__()
         from model.reservoir import EchoStateNetwork
         from model.attention import PatchMicroAttention
@@ -228,7 +239,7 @@ class NoDSConvModel(nn.Module):
             nn.ReLU(inplace=True),
         )
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
-        self.classifier = BinaryClassifier(in_features=32, num_classes=6)
+        self.classifier = BinaryClassifier(in_features=32, num_classes=num_classes)
 
     def forward(self, x):
         x = self.reservoir(x)
@@ -242,17 +253,17 @@ class NoDSConvModel(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-def run_ablation(args, device, test_ds, norm_stats):
-    train_ds = load_train_data(args, norm_stats)
+def run_ablation(args, device, test_ds, norm_stats, DatasetCls, data_dir, num_classes):
+    train_ds = load_train_data(DatasetCls, data_dir, norm_stats)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
 
     variants = [
-        ("Full Model", SensorFusionHAR(input_channels=6, reservoir_size=64, num_classes=6)),
-        ("No Reservoir", NoReservoirModel()),
-        ("No Attention", NoAttentionModel()),
-        ("No Binary Head", NoBinaryHeadModel()),
-        ("No DS-Conv", NoDSConvModel()),
+        ("Full Model", SensorFusionHAR(input_channels=6, reservoir_size=32, num_classes=num_classes)),
+        ("No Reservoir", NoReservoirModel(num_classes)),
+        ("No Attention", NoAttentionModel(num_classes)),
+        ("No Binary Head", NoBinaryHeadModel(num_classes)),
+        ("No DS-Conv", NoDSConvModel(num_classes)),
     ]
 
     results = []
@@ -306,18 +317,19 @@ def run_benchmark(model, device, test_ds, args):
     param_count = model.count_parameters()
     model_kb = model.model_size_kb()
 
-    reservoir_flops = 128 * (6 * 64 + 64 * 64)
-    dsconv_block1 = 128 * (64 * 5 + 64 * 128)
-    dsconv_block2 = 64 * (128 * 5 + 128 * 128)
-    dsconv_block3 = 32 * (128 * 3 + 128 * 128)
+    reservoir_flops = 128 * (6 * 32 + 32 * 32)
+    dsconv_block1 = 128 * (32 * 5 + 32 * 48)
+    dsconv_block2 = 64 * (48 * 5 + 48 * 48)
+    dsconv_block3 = 32 * (48 * 3 + 48 * 48)
     dsconv_flops = dsconv_block1 + dsconv_block2 + dsconv_block3
-    patch_dim = 128 * 4
+    patch_dim = 48 * 4
     num_patches = 8
-    proj_flops = num_patches * patch_dim * 64
-    attn_flops = num_patches * num_patches * 64 * 3
-    ffn_flops = num_patches * (64 * 128 + 128 * 64)
+    proj_flops = num_patches * patch_dim * 32
+    attn_flops = num_patches * num_patches * 32 * 3
+    ffn_flops = num_patches * (32 * 48 + 48 * 32)
     attention_flops = proj_flops + attn_flops + ffn_flops
-    classifier_flops = 64 * 6
+    num_classes = model(sample).shape[1]
+    classifier_flops = 32 * num_classes
     total_flops = reservoir_flops + dsconv_flops + attention_flops + classifier_flops
 
     print("\n" + "=" * 50)
@@ -341,8 +353,10 @@ def main():
     args = parse_args()
     device = get_device(args.device)
 
-    if not os.path.isdir(args.data_dir):
-        print("ERROR: Dataset not found at {}".format(args.data_dir))
+    data_dir, DatasetCls, activity_labels, num_classes = get_dataset_config(args)
+
+    if not os.path.isdir(data_dir):
+        print("ERROR: Dataset not found at {}".format(data_dir))
         print("Run train.py first to download the dataset.")
         return
 
@@ -351,26 +365,26 @@ def main():
         print("Run train.py first to train the model.")
         return
 
-    test_ds, norm_stats = load_data(args, device)
+    test_ds, norm_stats = load_data(args, device, DatasetCls, data_dir)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
 
     if args.ablation:
-        run_ablation(args, device, test_ds, norm_stats)
+        run_ablation(args, device, test_ds, norm_stats, DatasetCls, data_dir, num_classes)
         return
 
     print("Loading model from {}".format(args.checkpoint))
-    model = SensorFusionHAR(input_channels=6, reservoir_size=64, num_classes=6).to(device)
+    model = SensorFusionHAR(input_channels=6, reservoir_size=32, num_classes=num_classes).to(device)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    print("Model: SensorFusionHAR")
+    print("Model: SensorFusionHAR ({} classes)".format(num_classes))
     print("Parameters: {:,}".format(model.count_parameters()))
     print("Model size: {:.2f} KB".format(model.model_size_kb()))
     print("Checkpoint epoch: {}".format(checkpoint.get("epoch", "N/A")))
     print("")
 
     acc, f1_macro, f1_per_class, preds, labels = evaluate(model, test_loader, device)
-    print_results(acc, f1_macro, f1_per_class, preds, labels)
+    print_results(acc, f1_macro, f1_per_class, preds, labels, activity_labels)
 
     if args.benchmark:
         run_benchmark(model, device, test_ds, args)
