@@ -1,4 +1,4 @@
-# SensorFusion-HAR
+# SensorFusion-HAR 
 
 A lightweight real-time Human Activity Recognition system using a novel 5-stage pipeline -- reservoir computing with learnable dynamics, depthwise separable convolutions, spectral-domain gated fusion, patch micro-attention with entropy regularization, and scaled binary quantization -- achieving sub-10ms latency in ~23KB (INT8) with 7 novel architectural and training contributions.
 
