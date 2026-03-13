@@ -29,16 +29,27 @@ class PatchMicroAttention(nn.Module):
         nn.init.xavier_uniform_(self.ffn[0].weight)
         nn.init.xavier_uniform_(self.ffn[2].weight)
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         x = x.transpose(1, 2)
         batch = x.shape[0]
         x = x.reshape(batch, self.num_patches, self.patch_dim)
         x = self.projection(x) + self.pos_embedding
 
         x_norm = self.norm1(x)
-        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        if return_attention:
+            attn_out, attn_weights = self.attn(
+                x_norm, x_norm, x_norm,
+                need_weights=True, average_attn_weights=False
+            )
+        else:
+            attn_out, _ = self.attn(x_norm, x_norm, x_norm)
         x = x + attn_out
 
         x = x + self.ffn(self.norm2(x))
 
-        return x.mean(dim=1)
+        pooled = x.mean(dim=1)
+
+        if return_attention:
+            attn_entropy = -(attn_weights * torch.log(attn_weights + 1e-8)).sum(dim=-1).mean()
+            return pooled, attn_weights, attn_entropy
+        return pooled

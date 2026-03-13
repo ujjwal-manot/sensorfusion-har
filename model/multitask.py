@@ -84,11 +84,11 @@ class MultiTaskHAR(nn.Module):
             reservoir_size=self.reservoir.reservoir_size,
             num_classes=self.activity_head.head.linear.out_features,
         )
-        backbone.reservoir.load_state_dict(self.reservoir.state_dict())
+        backbone.reservoir.load_state_dict(self.reservoir.state_dict(), strict=False)
         backbone.dsconv.load_state_dict(self.dsconv.state_dict())
-        backbone.gate.load_state_dict(self.gate.state_dict())
+        backbone.gate.load_state_dict(self.gate.state_dict(), strict=False)
         backbone.attention.load_state_dict(self.attention.state_dict())
-        backbone.classifier.load_state_dict(self.activity_head.state_dict())
+        backbone.classifier.load_state_dict(self.activity_head.state_dict(), strict=False)
         return backbone
 
 

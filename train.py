@@ -13,6 +13,7 @@ import numpy as np
 from model import SensorFusionHAR
 from model.dataset import UCIHARDataset
 from model.dataset_pamap2 import PAMAP2Dataset, ACTIVITY_NAMES as PAMAP2_LABELS
+from model.mixup import reservoir_manifold_mixup
 
 
 def set_seed(seed=42):
@@ -36,6 +37,9 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
+    parser.add_argument("--entropy_weight", type=float, default=0.01)
+    parser.add_argument("--mixup_alpha", type=float, default=0.2)
+    parser.add_argument("--mixup_prob", type=float, default=0.3)
     return parser.parse_args()
 
 
@@ -53,7 +57,8 @@ def get_dataset_config(args):
     return data_dir, UCIHARDataset, UCIHAR_LABELS, 6
 
 
-def train_epoch(model, loader, criterion, optimizer, device):
+def train_epoch(model, loader, criterion, optimizer, device,
+                entropy_weight=0.01, mixup_alpha=0.2, mixup_prob=0.3):
     model.train()
     total_loss = 0.0
     correct = 0
@@ -61,8 +66,20 @@ def train_epoch(model, loader, criterion, optimizer, device):
     for X, y in loader:
         X, y = X.to(device), y.to(device)
         optimizer.zero_grad()
-        out = model(X)
+
+        out, aux = model(X, return_aux=True)
         loss = criterion(out, y)
+
+        if entropy_weight > 0:
+            loss = loss - entropy_weight * aux["attention_entropy"]
+
+        if mixup_alpha > 0 and random.random() < mixup_prob:
+            idx = torch.randperm(X.size(0), device=device)
+            mixup_loss = reservoir_manifold_mixup(
+                model, X, X[idx], y, y[idx], criterion, alpha=mixup_alpha
+            )
+            loss = loss + 0.5 * mixup_loss
+
         loss.backward()
         optimizer.step()
         total_loss += loss.item() * X.size(0)
@@ -151,6 +168,15 @@ def main():
     print("Model size: {:.2f} KB".format(model_kb))
     print("Device: {}\n".format(device))
 
+    summary = model.architecture_summary()
+    print("Architecture: learnable_sr={}, diff_states={}, fusion={}, scaled_binary={}".format(
+        summary["learnable_spectral_radius"],
+        summary["differential_states"],
+        summary["fusion_type"],
+        summary["scaled_binary_weights"],
+    ))
+    print("")
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     criterion = nn.CrossEntropyLoss()
@@ -164,7 +190,12 @@ def main():
     print("-" * 66)
 
     for epoch in range(1, args.epochs + 1):
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
+        train_loss, train_acc = train_epoch(
+            model, train_loader, criterion, optimizer, device,
+            entropy_weight=args.entropy_weight,
+            mixup_alpha=args.mixup_alpha,
+            mixup_prob=args.mixup_prob,
+        )
         test_loss, test_acc, f1_macro, f1_per_class, preds, labels = eval_epoch(
             model, test_loader, criterion, device
         )

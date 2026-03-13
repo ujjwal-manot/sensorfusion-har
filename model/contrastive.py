@@ -93,7 +93,7 @@ def pretrain_contrastive(model, dataset, augmentor, device, epochs=50, batch_siz
 
 
 def transfer_weights(pretrained_simclr, target_model):
-    target_model.reservoir.load_state_dict(pretrained_simclr.reservoir.state_dict())
+    target_model.reservoir.load_state_dict(pretrained_simclr.reservoir.state_dict(), strict=False)
     target_model.dsconv.load_state_dict(pretrained_simclr.dsconv.state_dict())
     target_model.attention.load_state_dict(pretrained_simclr.attention.state_dict())
     return target_model

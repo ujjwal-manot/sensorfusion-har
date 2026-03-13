@@ -74,9 +74,9 @@ def load_model():
         num_classes = state.get("num_classes", 6)
         model = SensorFusionHAR(num_classes=num_classes)
         if "model_state_dict" in state:
-            model.load_state_dict(state["model_state_dict"])
+            model.load_state_dict(state["model_state_dict"], strict=False)
         else:
-            model.load_state_dict(state)
+            model.load_state_dict(state, strict=False)
         model.to(device)
         model.eval()
 

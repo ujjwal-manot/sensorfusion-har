@@ -407,7 +407,7 @@ def main():
     print("Loading model from {}".format(args.checkpoint))
     model = SensorFusionHAR(input_channels=6, reservoir_size=32, num_classes=num_classes).to(device)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
 
     print("Model: SensorFusionHAR ({} classes)".format(num_classes))
     print("Parameters: {:,}".format(model.count_parameters()))

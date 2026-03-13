@@ -36,10 +36,20 @@ def _extract_embeddings(model, dataset, device, n_samples):
     with torch.no_grad():
         h_reservoir = model.reservoir(X)
 
-        h_dsconv_in = h_reservoir.transpose(1, 2)
+        if hasattr(model, "_merge_reservoir_states"):
+            h_merged = model._merge_reservoir_states(h_reservoir)
+        else:
+            h_merged = h_reservoir
+
+        h_dsconv_in = h_merged.transpose(1, 2)
         h_dsconv = model.dsconv(h_dsconv_in)
 
-        h_attention = model.attention(h_dsconv)
+        if hasattr(model, "gate"):
+            h_gated = model.gate(h_dsconv_in, h_dsconv)
+        else:
+            h_gated = h_dsconv
+
+        h_attention = model.attention(h_gated)
 
         h_final = model.classifier(h_attention)
 

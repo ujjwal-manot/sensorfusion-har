@@ -97,7 +97,7 @@ def masked_pretrain(model, dataset, device, epochs=50, batch_size=128, lr=0.0003
 
 
 def transfer_masked_weights(pretrained_msm, target_model):
-    target_model.reservoir.load_state_dict(pretrained_msm.backbone_reservoir.state_dict())
+    target_model.reservoir.load_state_dict(pretrained_msm.backbone_reservoir.state_dict(), strict=False)
     target_model.dsconv.load_state_dict(pretrained_msm.backbone_dsconv.state_dict())
     target_model.attention.load_state_dict(pretrained_msm.backbone_attention.state_dict())
     return target_model
