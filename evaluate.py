@@ -153,15 +153,18 @@ class NoReservoirModel(nn.Module):
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
         from model.binary_head import BinaryClassifier
+        from model.sensorfusion import GatedResidualFusion
         self.input_proj = nn.Linear(6, 32)
         self.dsconv = DSConvEncoder(in_channels=32)
+        self.gate = GatedResidualFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.classifier = BinaryClassifier(in_features=32, num_classes=num_classes)
 
     def forward(self, x):
         x = self.input_proj(x)
         x = x.transpose(1, 2)
-        x = self.dsconv(x)
+        dsconv_out = self.dsconv(x)
+        x = self.gate(x, dsconv_out)
         x = self.attention(x)
         x = self.classifier(x)
         return x
@@ -201,8 +204,10 @@ class NoBinaryHeadModel(nn.Module):
         from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
+        from model.sensorfusion import GatedResidualFusion
         self.reservoir = EchoStateNetwork(6, 32)
         self.dsconv = DSConvEncoder(in_channels=32)
+        self.gate = GatedResidualFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.bn = nn.BatchNorm1d(32)
         self.head = nn.Linear(32, num_classes)
@@ -210,7 +215,8 @@ class NoBinaryHeadModel(nn.Module):
     def forward(self, x):
         x = self.reservoir(x)
         x = x.transpose(1, 2)
-        x = self.dsconv(x)
+        dsconv_out = self.dsconv(x)
+        x = self.gate(x, dsconv_out)
         x = self.attention(x)
         x = self.head(self.bn(x))
         return x
@@ -253,6 +259,31 @@ class NoDSConvModel(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
+class NoGateModel(nn.Module):
+
+    def __init__(self, num_classes=6):
+        super().__init__()
+        from model.reservoir import EchoStateNetwork
+        from model.dsconv import DSConvEncoder
+        from model.attention import PatchMicroAttention
+        from model.binary_head import BinaryClassifier
+        self.reservoir = EchoStateNetwork(6, 32)
+        self.dsconv = DSConvEncoder(in_channels=32)
+        self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
+        self.classifier = BinaryClassifier(in_features=32, num_classes=num_classes)
+
+    def forward(self, x):
+        x = self.reservoir(x)
+        x = x.transpose(1, 2)
+        x = self.dsconv(x)
+        x = self.attention(x)
+        x = self.classifier(x)
+        return x
+
+    def count_parameters(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
 def run_ablation(args, device, test_ds, norm_stats, DatasetCls, data_dir, num_classes):
     train_ds = load_train_data(DatasetCls, data_dir, norm_stats)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
@@ -264,6 +295,7 @@ def run_ablation(args, device, test_ds, norm_stats, DatasetCls, data_dir, num_cl
         ("No Attention", NoAttentionModel(num_classes)),
         ("No Binary Head", NoBinaryHeadModel(num_classes)),
         ("No DS-Conv", NoDSConvModel(num_classes)),
+        ("No Gate", NoGateModel(num_classes)),
     ]
 
     results = []

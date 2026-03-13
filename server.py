@@ -21,7 +21,9 @@ ACTIVITY_LABELS = {
     5: "Laying",
 }
 
-CHANNEL_STATS = {
+CHANNEL_STATS = None
+
+DEFAULT_CHANNEL_STATS = {
     "ax": {"mean": -0.5016, "std": 0.5592},
     "ay": {"mean": 0.7806, "std": 0.5129},
     "az": {"mean": -0.0455, "std": 0.4037},
@@ -61,23 +63,49 @@ def get_local_ip():
 
 
 def load_model():
-    global model
+    global model, CHANNEL_STATS
     if not CHECKPOINT_PATH.exists():
         print(f"[server] No checkpoint at {CHECKPOINT_PATH}, using heuristic classifier")
+        CHANNEL_STATS = DEFAULT_CHANNEL_STATS
         return
     try:
         from model.sensorfusion import SensorFusionHAR
-        model = SensorFusionHAR()
         state = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
+        num_classes = state.get("num_classes", 6)
+        model = SensorFusionHAR(num_classes=num_classes)
         if "model_state_dict" in state:
             model.load_state_dict(state["model_state_dict"])
         else:
             model.load_state_dict(state)
         model.to(device)
         model.eval()
-        print("[server] Model loaded from checkpoint")
+
+        norm_stats = state.get("normalization_stats", None)
+        stats_file = CHECKPOINT_PATH.parent / "normalization_stats.json"
+        if norm_stats is None and stats_file.exists():
+            with open(stats_file) as f:
+                norm_stats = json.load(f)
+
+        if norm_stats is not None:
+            means = norm_stats["means"]
+            stds = norm_stats["stds"]
+            CHANNEL_STATS = {}
+            for i, ch in enumerate(CHANNEL_ORDER):
+                CHANNEL_STATS[ch] = {"mean": means[i], "std": stds[i]}
+            print("[server] Normalization stats loaded from checkpoint")
+        else:
+            CHANNEL_STATS = DEFAULT_CHANNEL_STATS
+            print("[server] Using default normalization stats")
+
+        if "activity_labels" in state:
+            global ACTIVITY_LABELS
+            labels = state["activity_labels"]
+            ACTIVITY_LABELS = {i: labels[i] for i in range(len(labels))}
+
+        print(f"[server] Model loaded ({num_classes} classes)")
     except Exception as e:
         model = None
+        CHANNEL_STATS = DEFAULT_CHANNEL_STATS
         print(f"[server] Failed to load model: {e}, using heuristic classifier")
 
 

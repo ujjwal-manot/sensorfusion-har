@@ -2,6 +2,7 @@ import os
 import json
 import time
 import argparse
+import random
 
 import torch
 import torch.nn as nn
@@ -12,6 +13,15 @@ import numpy as np
 from model import SensorFusionHAR
 from model.dataset import UCIHARDataset
 from model.dataset_pamap2 import PAMAP2Dataset, ACTIVITY_NAMES as PAMAP2_LABELS
+
+
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 UCIHAR_LABELS = ["WALKING", "WALKING_UP", "WALKING_DOWN", "SITTING", "STANDING", "LAYING"]
@@ -95,6 +105,7 @@ def print_confusion_matrix(y_true, y_pred, labels):
 
 
 def main():
+    set_seed(42)
     args = parse_args()
     device = get_device(args.device)
     os.makedirs(args.checkpoint_dir, exist_ok=True)
