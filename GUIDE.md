@@ -313,7 +313,7 @@ The freq_gate bias is initialized to zero, so all gates start at sigmoid(0) = 0.
 
 This adds ~1,890 parameters (1x1 conv + Linear(17, 17) gate).
 
-The old scalar GatedResidualFusion is kept in the codebase for ablation comparison.
+The old scalar GatedResidualFusion is kept in the codebase for backward compatibility but is not used in the default model or ablation variants.
 
 ---
 
@@ -471,7 +471,10 @@ class SensorFusionHAR(nn.Module):
             input_channels, reservoir_size,
             learnable_sr=True, use_diff_states=True, reservoir_dropout=0.1
         )
-        self.diff_gate = nn.Parameter(torch.zeros(reservoir_size))
+        if self.reservoir.use_diff_states:
+            self.diff_gate = nn.Parameter(torch.zeros(reservoir_size))
+        else:
+            self.diff_gate = None
         self.dsconv = DSConvEncoder(in_channels=reservoir_size)
         self.gate = SpectralGatedFusion(
             reservoir_dim=reservoir_size, dsconv_channels=48, seq_len=32
@@ -485,8 +488,15 @@ class SensorFusionHAR(nn.Module):
         h = h.transpose(1, 2)             # (batch, 128, 32) -> (batch, 32, 128)
         dsconv_out = self.dsconv(h)        # (batch, 32, 128) -> (batch, 48, 32)
         x = self.gate(h, dsconv_out)       # spectral gated fusion
-        x = self.attention(x)             # (batch, 48, 32)  -> (batch, 32)
+        if return_aux:
+            x, attn_weights, attn_entropy = self.attention(x, return_attention=True)
+        else:
+            x = self.attention(x)         # (batch, 48, 32)  -> (batch, 32)
         x = self.classifier(x)            # (batch, 32)      -> (batch, num_classes)
+        if return_aux:
+            return x, {"attention_entropy": attn_entropy,
+                       "attention_weights": attn_weights,
+                       "spectral_radius": self.reservoir.effective_spectral_radius}
         return x
 ```
 
@@ -497,7 +507,7 @@ The `return_aux=True` option returns attention weights, attention entropy, and t
 The model also exposes `reservoir_states(x)` and `forward_from_reservoir(h)` methods for reservoir manifold mixup during training.
 
 Parameter count:
-- ESN: 1 trainable (spectral radius logit) + 1,216 buffer parameters
+- ESN: 1 trainable (spectral radius logit) + 1,217 buffer parameters
 - Diff gate: 32 trainable
 - DS-Conv: ~7,000 trainable
 - Spectral Gate: ~1,890 trainable
@@ -834,7 +844,7 @@ The `count_macs` function uses PyTorch forward hooks to capture the input/output
 - Conv1d standard: out_channels * out_length * in_channels * kernel_size
 - MultiheadAttention: 4 * seq * d^2 (QKV projections) + 2 * seq^2 * d (attention scores)
 
-Our model: 765,488 MACs, 0.0035 mJ per inference at FP32, 0.0002 mJ at INT8.
+Our model: 765,729 MACs, 0.0035 mJ per inference at FP32, 0.0002 mJ at INT8.
 
 ---
 
@@ -849,8 +859,13 @@ Training uses AdamW optimizer with cosine annealing learning rate schedule.
 The training loop:
 1. Load dataset, compute normalization stats (per-channel mean and std from training set)
 2. Normalize both train and test sets using training statistics
-3. Train for 100 epochs, saving the checkpoint with highest test accuracy
-4. The checkpoint stores: model weights, epoch, accuracy, F1 score, normalization stats, dataset name, num classes, activity labels
+3. Train for 100 epochs with all novel training features:
+   - Each batch calls `model(X, return_aux=True)` to get attention entropy and spectral radius
+   - **Attention entropy regularization**: `loss = loss - entropy_weight * aux["attention_entropy"]` (default weight 0.01) prevents attention collapse
+   - **Reservoir manifold mixup**: with probability 0.3, interpolates in frozen reservoir state space and adds 0.5x mixed loss
+   - **Stochastic reservoir masking**: variational dropout (p=0.1) on reservoir states during training
+   - **Learnable spectral radius**: gradient flows through `sr_logit` to optimize reservoir dynamics
+4. Save checkpoint with highest test accuracy (stores: model weights, epoch, accuracy, F1 score, normalization stats, dataset name, num classes, activity labels)
 
 ---
 
@@ -1002,17 +1017,18 @@ Open `sensorfusion_har.ipynb` in Jupyter or Google Colab. The notebook runs all 
 
 | File | What It Does |
 |------|-------------|
+| model/__init__.py | Public API -- re-exports all classes and functions |
 | model/reservoir.py | Echo State Network + learnable spectral radius + differential states + stochastic masking |
 | model/dsconv.py | Depthwise separable 1D convolutions |
 | model/attention.py | Patch micro-attention + entropy regularization |
 | model/binary_head.py | Scaled binary quantized classifier (STE) + binary export |
-| model/sensorfusion.py | Full pipeline + spectral gated fusion |
+| model/sensorfusion.py | Full pipeline + SpectralGatedFusion + GatedResidualFusion (legacy) |
 | model/mixup.py | Reservoir manifold mixup |
 | model/augmentation.py | 7-method sensor data augmentation |
 | model/contrastive.py | SimCLR contrastive pre-training |
 | model/masked_pretrain.py | Masked Sensor Modeling |
-| model/multitask.py | Multi-task adversarial training |
-| model/curriculum.py | Curriculum learning scheduler |
+| model/multitask.py | Multi-task adversarial training with gradient reversal |
+| model/curriculum.py | Curriculum learning scheduler + entropy-aware trainer |
 | model/personalization.py | Few-shot personalization |
 | model/adversarial.py | FGSM/PGD robustness testing |
 | model/transitions.py | Activity transition detection |
@@ -1022,5 +1038,6 @@ Open `sensorfusion_har.ipynb` in Jupyter or Google Colab. The notebook runs all 
 | model/dataset.py | UCI-HAR dataset loader |
 | model/dataset_pamap2.py | PAMAP2 dataset loader |
 | train.py | Training with entropy reg + manifold mixup |
-| evaluate.py | Evaluation + ablation + benchmark |
+| evaluate.py | Evaluation + ablation (with proper architecture matching) + benchmark |
 | server.py | FastAPI WebSocket server |
+| sensorfusion_har.ipynb | 68-cell notebook covering all analysis and experiments |

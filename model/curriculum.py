@@ -39,7 +39,7 @@ class CurriculumScheduler:
 
 class CurriculumTrainer:
 
-    def __init__(self, model, train_ds, test_ds, device, scheduler, batch_size=64, lr=0.001):
+    def __init__(self, model, train_ds, test_ds, device, scheduler, batch_size=64, lr=0.001, entropy_weight=0.01):
         self.model = model.to(device)
         self.train_ds = train_ds
         self.test_ds = test_ds
@@ -47,6 +47,7 @@ class CurriculumTrainer:
         self.scheduler = scheduler
         self.batch_size = batch_size
         self.lr = lr
+        self.entropy_weight = entropy_weight
 
     def _filter_dataset(self, dataset, active_classes):
         indices = []
@@ -94,8 +95,13 @@ class CurriculumTrainer:
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
 
-                logits = self.model(batch_x)
-                loss = criterion(logits, batch_y)
+                if self.entropy_weight > 0 and hasattr(self.model, 'forward') and 'return_aux' in self.model.forward.__code__.co_varnames:
+                    logits, aux = self.model(batch_x, return_aux=True)
+                    loss = criterion(logits, batch_y)
+                    loss = loss - self.entropy_weight * aux["attention_entropy"]
+                else:
+                    logits = self.model(batch_x)
+                    loss = criterion(logits, batch_y)
 
                 optimizer.zero_grad()
                 loss.backward()

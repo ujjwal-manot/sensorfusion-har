@@ -146,17 +146,35 @@ def train_variant(model, train_loader, test_loader, epochs, lr, device):
     return model
 
 
-class NoReservoirModel(nn.Module):
+class _AblationBase(nn.Module):
+
+    def _make_reservoir(self):
+        from model.reservoir import EchoStateNetwork
+        self.reservoir = EchoStateNetwork(
+            6, 32, learnable_sr=True, use_diff_states=True, reservoir_dropout=0.1
+        )
+        self.diff_gate = nn.Parameter(torch.zeros(32))
+
+    def _merge_reservoir_states(self, h):
+        rs = self.reservoir.reservoir_size
+        alpha = torch.sigmoid(self.diff_gate)
+        return h[:, :, :rs] + alpha * h[:, :, rs:]
+
+    def count_parameters(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class NoReservoirModel(_AblationBase):
 
     def __init__(self, num_classes=6):
         super().__init__()
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
         from model.binary_head import BinaryClassifier
-        from model.sensorfusion import GatedResidualFusion
+        from model.sensorfusion import SpectralGatedFusion
         self.input_proj = nn.Linear(6, 32)
         self.dsconv = DSConvEncoder(in_channels=32)
-        self.gate = GatedResidualFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
+        self.gate = SpectralGatedFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.classifier = BinaryClassifier(in_features=32, num_classes=num_classes)
 
@@ -169,70 +187,64 @@ class NoReservoirModel(nn.Module):
         x = self.classifier(x)
         return x
 
-    def count_parameters(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-
-class NoAttentionModel(nn.Module):
+class NoAttentionModel(_AblationBase):
 
     def __init__(self, num_classes=6):
         super().__init__()
-        from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
         from model.binary_head import BinaryClassifier
-        self.reservoir = EchoStateNetwork(6, 32)
+        from model.sensorfusion import SpectralGatedFusion
+        self._make_reservoir()
         self.dsconv = DSConvEncoder(in_channels=32)
+        self.gate = SpectralGatedFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.classifier = BinaryClassifier(in_features=48, num_classes=num_classes)
 
     def forward(self, x):
-        x = self.reservoir(x)
-        x = x.transpose(1, 2)
-        x = self.dsconv(x)
+        h = self.reservoir(x)
+        h = self._merge_reservoir_states(h)
+        h = h.transpose(1, 2)
+        dsconv_out = self.dsconv(h)
+        x = self.gate(h, dsconv_out)
         x = self.pool(x).squeeze(-1)
         x = self.classifier(x)
         return x
 
-    def count_parameters(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-
-class NoBinaryHeadModel(nn.Module):
+class NoBinaryHeadModel(_AblationBase):
 
     def __init__(self, num_classes=6):
         super().__init__()
-        from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
-        from model.sensorfusion import GatedResidualFusion
-        self.reservoir = EchoStateNetwork(6, 32)
+        from model.sensorfusion import SpectralGatedFusion
+        self._make_reservoir()
         self.dsconv = DSConvEncoder(in_channels=32)
-        self.gate = GatedResidualFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
+        self.gate = SpectralGatedFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.bn = nn.BatchNorm1d(32)
         self.head = nn.Linear(32, num_classes)
 
     def forward(self, x):
-        x = self.reservoir(x)
-        x = x.transpose(1, 2)
-        dsconv_out = self.dsconv(x)
-        x = self.gate(x, dsconv_out)
+        h = self.reservoir(x)
+        h = self._merge_reservoir_states(h)
+        h = h.transpose(1, 2)
+        dsconv_out = self.dsconv(h)
+        x = self.gate(h, dsconv_out)
         x = self.attention(x)
         x = self.head(self.bn(x))
         return x
 
-    def count_parameters(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-
-class NoDSConvModel(nn.Module):
+class NoDSConvModel(_AblationBase):
 
     def __init__(self, num_classes=6):
         super().__init__()
-        from model.reservoir import EchoStateNetwork
         from model.attention import PatchMicroAttention
         from model.binary_head import BinaryClassifier
-        self.reservoir = EchoStateNetwork(6, 32)
+        from model.sensorfusion import SpectralGatedFusion
+        self._make_reservoir()
         self.conv = nn.Sequential(
             nn.Conv1d(32, 48, kernel_size=5, stride=1, padding=2),
             nn.BatchNorm1d(48),
@@ -244,44 +256,41 @@ class NoDSConvModel(nn.Module):
             nn.BatchNorm1d(48),
             nn.ReLU(inplace=True),
         )
+        self.gate = SpectralGatedFusion(reservoir_dim=32, dsconv_channels=48, seq_len=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.classifier = BinaryClassifier(in_features=32, num_classes=num_classes)
 
     def forward(self, x):
-        x = self.reservoir(x)
-        x = x.transpose(1, 2)
-        x = self.conv(x)
+        h = self.reservoir(x)
+        h = self._merge_reservoir_states(h)
+        h = h.transpose(1, 2)
+        conv_out = self.conv(h)
+        x = self.gate(h, conv_out)
         x = self.attention(x)
         x = self.classifier(x)
         return x
 
-    def count_parameters(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-
-class NoGateModel(nn.Module):
+class NoGateModel(_AblationBase):
 
     def __init__(self, num_classes=6):
         super().__init__()
-        from model.reservoir import EchoStateNetwork
         from model.dsconv import DSConvEncoder
         from model.attention import PatchMicroAttention
         from model.binary_head import BinaryClassifier
-        self.reservoir = EchoStateNetwork(6, 32)
+        self._make_reservoir()
         self.dsconv = DSConvEncoder(in_channels=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.classifier = BinaryClassifier(in_features=32, num_classes=num_classes)
 
     def forward(self, x):
-        x = self.reservoir(x)
-        x = x.transpose(1, 2)
-        x = self.dsconv(x)
+        h = self.reservoir(x)
+        h = self._merge_reservoir_states(h)
+        h = h.transpose(1, 2)
+        x = self.dsconv(h)
         x = self.attention(x)
         x = self.classifier(x)
         return x
-
-    def count_parameters(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
 def run_ablation(args, device, test_ds, norm_stats, DatasetCls, data_dir, num_classes):

@@ -9,7 +9,7 @@ from .reservoir import EchoStateNetwork
 from .dsconv import DSConvEncoder
 from .attention import PatchMicroAttention
 from .binary_head import BinaryClassifier
-from .sensorfusion import GatedResidualFusion, SensorFusionHAR
+from .sensorfusion import SpectralGatedFusion, SensorFusionHAR
 
 
 class GradientReversal(torch.autograd.Function):
@@ -55,9 +55,13 @@ class MultiTaskHAR(nn.Module):
 
     def __init__(self, input_channels=6, reservoir_size=32, num_classes=6, num_subjects=30):
         super().__init__()
-        self.reservoir = EchoStateNetwork(input_channels, reservoir_size)
+        self.reservoir = EchoStateNetwork(
+            input_channels, reservoir_size,
+            learnable_sr=True, use_diff_states=True, reservoir_dropout=0.1
+        )
+        self.diff_gate = nn.Parameter(torch.zeros(reservoir_size))
         self.dsconv = DSConvEncoder(in_channels=reservoir_size)
-        self.gate = GatedResidualFusion(reservoir_dim=reservoir_size, dsconv_channels=48, seq_len=32)
+        self.gate = SpectralGatedFusion(reservoir_dim=reservoir_size, dsconv_channels=48, seq_len=32)
         self.attention = PatchMicroAttention(in_channels=48, seq_len=32, d_model=32, ff_dim=48)
         self.activity_head = BinaryClassifier(in_features=32, num_classes=num_classes)
         self.grl = GradientReversalLayer(lambda_=1.0)
@@ -67,11 +71,17 @@ class MultiTaskHAR(nn.Module):
             nn.Linear(16, num_subjects),
         )
 
+    def _merge_reservoir_states(self, h):
+        rs = self.reservoir.reservoir_size
+        alpha = torch.sigmoid(self.diff_gate)
+        return h[:, :, :rs] + alpha * h[:, :, rs:]
+
     def forward(self, x):
-        x = self.reservoir(x)
-        x = x.transpose(1, 2)
-        dsconv_out = self.dsconv(x)
-        x = self.gate(x, dsconv_out)
+        h = self.reservoir(x)
+        h = self._merge_reservoir_states(h)
+        h = h.transpose(1, 2)
+        dsconv_out = self.dsconv(h)
+        x = self.gate(h, dsconv_out)
         features = self.attention(x)
         activity_logits = self.activity_head(features)
         reversed_features = self.grl(features)
