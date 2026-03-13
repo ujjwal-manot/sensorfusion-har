@@ -20,3 +20,4 @@ wandb/
 runs/
 checkpoints/
 *.tar.gz
+sensorfusion-har/

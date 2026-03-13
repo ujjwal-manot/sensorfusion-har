@@ -949,6 +949,156 @@ If you are presenting or writing about this project, these are the topics you sh
 
 ---
 
+## Part 15b: How to Know If Your Results Are Good
+
+After running the notebook, you will see many numbers. Here is how to judge whether your model is performing well, and what the key metrics actually mean.
+
+### Overall Accuracy and F1 Score
+
+| Metric | Good | Great | Suspicious |
+|--------|------|-------|------------|
+| UCI-HAR Accuracy | 90-93% | 93-96% | >98% (likely overfitting or data leak) |
+| UCI-HAR F1 Macro | 89-92% | 92-95% | >97% |
+| PAMAP2 Accuracy | 85-90% | 90-94% | >96% |
+| LOSO Mean Accuracy | 85-90% | 90-93% | >95% |
+
+**Why F1 Macro matters more than accuracy:** Accuracy can be misleading when classes are imbalanced. F1 Macro gives equal weight to every class, so a model that is bad at one rare activity cannot hide behind high accuracy on common activities.
+
+**What to watch for:**
+- If accuracy is much higher than F1 Macro (gap > 5%), your model is weak on one or more classes. Check the confusion matrix.
+- If training loss keeps dropping but test accuracy plateaus, you are overfitting. Reduce epochs or increase augmentation.
+- If test accuracy oscillates wildly across epochs, your learning rate is too high.
+
+### Confusion Matrix
+
+Look at the confusion matrix heatmap. A good model has a bright diagonal and dark off-diagonal cells. Common failure patterns in HAR:
+
+- **Sitting vs Standing confusion:** These activities produce very similar sensor patterns (phone is stationary). A 5-15% confusion rate between them is normal. If it is worse than 15%, the model is underfitting.
+- **Walking Upstairs vs Walking Downstairs:** These differ mainly in vertical acceleration trends. Some confusion (5-10%) is expected.
+- **Laying misclassified as Sitting/Standing:** This usually means normalization is wrong, since laying has a very distinct gravity axis signature.
+
+### Per-Class F1 Score
+
+| Class | Expected F1 | Why |
+|-------|-------------|-----|
+| Walking | 0.95+ | Very distinct periodic pattern |
+| Upstairs | 0.88-0.94 | Similar to walking but with vertical component |
+| Downstairs | 0.88-0.94 | Similar to walking, mirrors upstairs |
+| Sitting | 0.85-0.93 | Low motion, easily confused with standing |
+| Standing | 0.85-0.93 | Low motion, easily confused with sitting |
+| Laying | 0.95+ | Very distinct gravity axis orientation |
+
+If any class is below 0.80, something is wrong with that specific class.
+
+### Ablation Study
+
+The ablation tells you which components contribute the most. Here is how to read it:
+
+- **Full Model should be the best or very close to the best.** If a variant without a component beats the full model, that component may be hurting.
+- **No Reservoir** should drop by 2-5%. If it drops more, the reservoir is very important. If it does not drop, the CNN is doing most of the work.
+- **No Attention** should drop by 1-3%. Attention helps but is not the biggest contributor for sensor data.
+- **No Gate** should drop by 1-4%. If removing the spectral gate has no effect, the fusion is not learning useful frequency-selective behavior.
+- **No BinaryHead** may slightly improve accuracy (binary quantization trades some accuracy for compression). A drop of 0.5-1.5% is expected and acceptable because the binary head gives you 8x compression.
+- **No DSConv** should drop significantly (3-8%). The CNN is the backbone feature extractor.
+
+### Spectral Radius Learning
+
+The spectral radius starts near 0.9 and should change during training. What to look for:
+
+- **Increases toward 1.0:** The model wants longer memory (good for activities with longer temporal patterns).
+- **Decreases toward 0.5-0.7:** The model prefers shorter memory (faster-changing patterns dominate).
+- **Stays near 0.9:** The default was already optimal; not much to learn.
+- **Crosses 1.0:** This is a red flag. Spectral radius > 1 means the reservoir is unstable (exploding states). The sigmoid parameterization should prevent this, but check if it happens.
+
+### Training Loss Curve
+
+- **Smooth, monotonically decreasing:** Normal training.
+- **Spiky but overall decreasing:** The mixup and augmentation are adding stochasticity, which is fine.
+- **Flat from the start:** Learning rate is too low or the model is not learning.
+- **Drops fast then plateaus early (epoch 10-20):** Learning rate is too high, model converged to a local minimum. Try a smaller LR.
+- **Goes up then down:** The entropy regularization and mixup can cause early instability. This is normal if it settles by epoch 20-30.
+
+### Pre-Training Comparison (SimCLR / MSM)
+
+- **SimCLR and MSM should be within +/- 2% of supervised.** They are most useful when you have very little labeled data, which is not the case for UCI-HAR.
+- **If SimCLR beats supervised by > 2%:** Your supervised training may be underfitting. Try more epochs or a different LR.
+- **If MSM is much worse than supervised:** The mask ratio (15%) may need tuning, or the reconstruction task is too easy/hard.
+
+### Multi-Task Adversarial Training
+
+- **Should be within +/- 1.5% of supervised.** The adversarial head strips subject identity, which helps generalization but can hurt if subjects have very different activity patterns.
+- **If much worse:** The adversarial weight (lambda) is too strong. The gradient reversal is destroying activity-relevant information.
+
+### Curriculum Learning
+
+- **Should match or slightly beat standard training.** The curriculum introduces easy activities first (walking, laying) and hard ones later (sitting vs standing).
+- **If worse:** The difficulty ordering may not match the actual dataset difficulty. Check if the phase transitions (vertical lines in the plot) align with accuracy jumps.
+
+### LOSO Cross-Validation
+
+- **Standard deviation < 8% across subjects is good.** HAR is inherently subject-dependent.
+- **One or two subjects with very low accuracy (< 70%)** is common -- some people walk or sit in unusual ways.
+- **Mean LOSO accuracy is the most honest metric.** It tells you how the model performs on truly unseen subjects. Expect it to be 3-8% lower than standard train/test split accuracy.
+
+### Few-Shot Personalization
+
+- **k=5 should improve over base model by 1-5%.** Even 5 examples per class help the model adapt to a new user.
+- **k=50 should be the best.** If k=50 is worse than k=20, something is wrong (overfitting on support set).
+- **High variance across subjects is expected.** Some subjects are easy to personalize, others are not.
+
+### Adversarial Robustness
+
+- **At epsilon=0 (no attack), accuracy should match clean test accuracy.**
+- **At epsilon=0.01-0.02, accuracy should drop by < 5%.** This is mild noise.
+- **At epsilon=0.1-0.2, accuracy will drop 20-50%.** This is expected for any model.
+- **PGD should be worse than FGSM** at every epsilon. PGD is a stronger attack (iterative).
+- **If the model is robust to epsilon=0.5, it has learned meaningful features** rather than relying on fragile input patterns.
+
+### Sensor Drift
+
+- **Accuracy should degrade gracefully.** A sudden cliff means the model relies on absolute sensor values rather than relative patterns.
+- **Bias drift is the most damaging** (shifts the mean), followed by scale drift, then noise drift.
+- **If accuracy holds up to bias_drift=0.5:** The normalization is working well.
+
+### Activity Transition Detection
+
+- **Stable accuracy should be higher than transition accuracy.** Transitions are inherently harder because the sensor window contains parts of two different activities.
+- **Transition accuracy > 60% is decent.** > 70% is good.
+- **If transition accuracy is below 40%:** The model is too confident about its predictions and does not handle mixed-activity windows.
+
+### Energy Estimation
+
+- **Total MACs < 1M is excellent** for edge deployment.
+- **FP32 energy should be ~4x INT8 energy.** If the ratio is much different, check the MAC estimation.
+- **The full model should have slightly more MACs than the ablation variants.** If not, a component is not contributing compute-proportional value.
+
+### Confidence Calibration (ECE)
+
+- **ECE < 0.05 is well-calibrated.** The model's confidence matches its actual accuracy.
+- **ECE 0.05-0.10 is acceptable.**
+- **ECE > 0.15 means the model is overconfident** (predicts 95% confidence but is only right 80% of the time). Temperature scaling can help.
+
+### Inference Benchmark
+
+- **Mean latency < 10ms on CPU:** The model is real-time capable.
+- **P95 < 20ms:** No significant outlier latencies.
+- **If GPU latency is higher than CPU for this model:** The model is too small to benefit from GPU parallelism. The overhead of CPU-to-GPU transfer dominates. This is expected and normal for a 23K-param model.
+
+### Cross-Dataset Transfer (UCI-HAR to PAMAP2)
+
+- **Transfer should beat scratch by 2-5% in early epochs.** This shows the pretrained features are useful.
+- **By epoch 40-50, scratch may catch up.** With enough training, the randomly initialized model learns PAMAP2-specific features.
+- **If transfer is worse than scratch:** The two datasets have incompatible feature distributions. This can happen since PAMAP2 uses a different sensor placement and more activities.
+
+### Noise Robustness
+
+- **Accuracy at SNR=40dB should equal clean accuracy.** 40dB noise is negligible.
+- **Accuracy at SNR=10dB should be > 70%.** This is moderate noise.
+- **Accuracy at SNR=0dB should be > 40%.** At 0dB, signal and noise have equal power.
+- **If accuracy is still high at very low SNR (e.g., 85% at 0dB):** The model may not be using the actual sensor signal. Something is wrong.
+
+---
+
 ## Part 16: How to Explain This in a Paper
 
 **Abstract structure:** We present SensorFusion-HAR, a 23.1K-parameter model that introduces learnable spectral radius for Echo State Networks, differential reservoir state encoding, spectral-domain gated fusion, and scaled binary quantization, combined with depthwise separable convolutions and patch micro-attention for real-time HAR. We propose three novel training techniques -- reservoir manifold mixup, attention entropy regularization, and stochastic reservoir masking -- that add zero inference cost. We evaluate on UCI-HAR and PAMAP2 with comprehensive robustness metrics.
@@ -1008,8 +1158,11 @@ python server.py
 ```
 Open `http://localhost:8765` on your laptop, `http://<your-ip>:8765/phone` on your phone.
 
-### Run Notebook
-Open `sensorfusion_har.ipynb` in Jupyter or Google Colab. The notebook runs all 28 analysis sections end-to-end.
+### Run Notebook (Google Colab)
+Open `sensorfusion_har.ipynb` in Google Colab. The first two code cells automatically install all dependencies, clone the repo, and configure the Python path. No manual setup required -- just click "Run All".
+
+### Run Notebook (Local)
+If running locally, open the notebook from inside the `sensorfusion-har` directory. The setup cells detect the local environment and skip cloning.
 
 ---
 

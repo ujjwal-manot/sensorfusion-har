@@ -354,8 +354,8 @@ try{ws.close();}catch(e){}
 ws.onmessage=function(evt){
 try{
 var msg=JSON.parse(evt.data);
-if(msg.type==="sensor"||msg.sensor){
-var s=msg.sensor||msg;
+if(msg.sensor){
+var s=msg.sensor;
 pushData(accelData.x,s.ax||0);
 pushData(accelData.y,s.ay||0);
 pushData(accelData.z,s.az||0);
@@ -363,7 +363,7 @@ pushData(gyroData.x,s.gx||0);
 pushData(gyroData.y,s.gy||0);
 pushData(gyroData.z,s.gz||0);
 }
-if(msg.type==="prediction"||msg.activity){
+if(msg.activity){
 updateActivity(msg.activity,msg.confidence);
 if(msg.probabilities){
 updateProbabilities(msg.probabilities);
@@ -372,15 +372,8 @@ totalPredictions++;
 telPredictions.textContent=totalPredictions;
 addTimeline(msg.activity);
 }
-if(msg.telemetry){
-var t=msg.telemetry;
-if(t.sampling_rate!==undefined)telRate.textContent=t.sampling_rate+" Hz";
-if(t.buffer_fill!==undefined)telBuffer.textContent=t.buffer_fill+"/128";
-if(t.inference_time!==undefined)telInference.textContent=t.inference_time+" ms";
-}
-if(msg.sampling_rate!==undefined)telRate.textContent=msg.sampling_rate+" Hz";
-if(msg.buffer_fill!==undefined)telBuffer.textContent=msg.buffer_fill+"/128";
-if(msg.inference_time!==undefined)telInference.textContent=msg.inference_time+" ms";
+if(msg.buffer_size!==undefined)telBuffer.textContent=msg.buffer_size+"/128";
+if(msg.inference_time_ms!==undefined)telInference.textContent=msg.inference_time_ms+" ms";
 }catch(e){}
 };
 }

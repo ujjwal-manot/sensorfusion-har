@@ -266,15 +266,25 @@ async def phone_ws(websocket: WebSocket):
                 samples_since_inference = 0
                 window = list(sensor_buffer)[-WINDOW_SIZE:]
                 result = run_inference(window)
-                result["sensor_data"] = latest_sensor
-                result["buffer_size"] = len(sensor_buffer)
-                await broadcast_to_dashboards(result)
+                msg = {
+                    "activity": result["prediction"],
+                    "confidence": result["confidence"],
+                    "probabilities": result["probabilities"],
+                    "inference_time_ms": result["inference_time_ms"],
+                    "sensor": latest_sensor,
+                    "buffer_size": len(sensor_buffer),
+                }
+                await broadcast_to_dashboards(msg)
+                try:
+                    await websocket.send_text(json.dumps({"activity": msg["activity"], "confidence": msg["confidence"]}))
+                except Exception:
+                    pass
             else:
                 await broadcast_to_dashboards({
-                    "prediction": None,
+                    "activity": None,
                     "confidence": 0.0,
                     "probabilities": {},
-                    "sensor_data": latest_sensor,
+                    "sensor": latest_sensor,
                     "buffer_size": len(sensor_buffer),
                     "inference_time_ms": 0.0,
                 })
