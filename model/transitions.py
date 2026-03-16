@@ -19,18 +19,11 @@ def _classify_windows(dataset, threshold=0.95):
     transition_indices = []
     transition_info = []
 
-    for idx in range(len(dataset)):
-        x, y = dataset[idx]
-        label = y.item() if hasattr(y, "item") else y
-
-        if hasattr(dataset, "X") and hasattr(dataset, "y"):
-            window_data = dataset.X[idx]
-        else:
-            window_data = x
-
-        stable_indices.append(idx)
+    n = len(dataset)
 
     if hasattr(dataset, "_raw_window_labels"):
+        # Pre-populate stable_indices, then reclassify transitions
+        stable_indices = list(range(n))
         for idx in range(len(dataset)):
             raw_labels = dataset._raw_window_labels[idx]
             unique, counts = np.unique(raw_labels, return_counts=True)

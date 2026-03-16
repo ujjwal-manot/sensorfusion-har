@@ -130,6 +130,7 @@ def train_variant(model, train_loader, test_loader, epochs, lr, device):
             optimizer.zero_grad()
             loss = criterion(model(X), y)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
         scheduler.step()
 

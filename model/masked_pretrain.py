@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .reservoir import EchoStateNetwork
 from .dsconv import DSConvEncoder
@@ -21,7 +22,10 @@ class MaskedSensorModel(nn.Module):
             in_channels=48, seq_len=32, d_model=32, ff_dim=48
         )
 
-        self.reconstruction_head = nn.Linear(32, input_channels)
+        # Reconstruct from dsconv features (48 channels) which preserve temporal structure,
+        # instead of from pooled attention output (which collapses all temporal info into
+        # a single vector, making per-timestep reconstruction impossible)
+        self.reconstruction_head = nn.Linear(48, input_channels)
 
     def forward(self, x, mask=None):
         batch_size, seq_len, channels = x.shape
@@ -34,11 +38,18 @@ class MaskedSensorModel(nn.Module):
 
         h = self.backbone_reservoir(x_masked)
         h = h.transpose(1, 2)
-        h = self.backbone_dsconv(h)
-        h = self.backbone_attention(h)
+        dsconv_out = self.backbone_dsconv(h)  # (batch, 48, 32) — temporal info preserved
 
-        reconstruction = self.reconstruction_head(h)
-        reconstruction = reconstruction.unsqueeze(1).expand(-1, seq_len, -1)
+        # Still run attention to train those weights for downstream transfer
+        _ = self.backbone_attention(dsconv_out)
+
+        # Reconstruct from dsconv features: upsample back to original temporal resolution
+        # dsconv_out shape: (batch, 48, 32) → interpolate → (batch, 48, seq_len)
+        recon_features = F.interpolate(
+            dsconv_out, size=seq_len, mode='linear', align_corners=False
+        )
+        # (batch, 48, seq_len) → (batch, seq_len, 48) → project to (batch, seq_len, channels)
+        reconstruction = self.reconstruction_head(recon_features.transpose(1, 2))
 
         return reconstruction, mask
 

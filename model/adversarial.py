@@ -15,7 +15,10 @@ def fgsm_attack(model, x, y, epsilon, device):
 
     grad_sign = x_adv.grad.data.sign()
     x_adv = x_adv.detach() + epsilon * grad_sign
-    return x_adv.detach()
+    # Clamp perturbation to epsilon ball (consistent with PGD implementation)
+    perturbation = torch.clamp(x_adv - x.to(device), min=-epsilon, max=epsilon)
+    x_adv = (x.to(device) + perturbation).detach()
+    return x_adv
 
 
 def pgd_attack(model, x, y, epsilon, alpha, num_steps, device):
