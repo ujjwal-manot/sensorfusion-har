@@ -111,11 +111,18 @@ def plot_attention_maps(model, dataset, device, n_samples=4, activity_labels=Non
 
     captured_weights = []
 
-    def hook_fn(module, input, output):
-        _, attn_weights = module(input[0], input[1], input[2], need_weights=True, average_attn_weights=True)
-        captured_weights.append(attn_weights.detach().cpu())
-
     hook_handle = None
+
+    def hook_fn(module, input, output):
+        nonlocal hook_handle
+        # Re-run with need_weights=True, but remove hook first to avoid recursion
+        hook_handle.remove()
+        with torch.no_grad():
+            _, attn_weights = module(input[0], input[1], input[2], need_weights=True, average_attn_weights=True)
+        captured_weights.append(attn_weights.detach().cpu())
+        # Re-register for next sample
+        hook_handle = module.register_forward_hook(hook_fn)
+
     for module in model.modules():
         if isinstance(module, torch.nn.MultiheadAttention):
             hook_handle = module.register_forward_hook(hook_fn)

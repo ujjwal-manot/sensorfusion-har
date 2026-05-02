@@ -14,3 +14,5 @@ from .transitions import detect_transitions, evaluate_transition_accuracy, plot_
 from .drift import simulate_bias_drift, simulate_scale_drift, simulate_noise_drift, evaluate_drift_robustness, plot_drift_robustness
 from .energy import count_macs, estimate_energy, compare_models_energy, plot_energy_comparison
 from .mixup import reservoir_manifold_mixup
+from .sensorfusion_lite import SensorFusionLite, MaskedSensorModelLite, EchoStateNetworkLite, DSConvEncoderLite, SimpleFCGate, transfer_masked_weights_lite
+from .dataset_merged import MergedHARDataset, MERGED_ACTIVITY_LABELS, build_merged_dataset

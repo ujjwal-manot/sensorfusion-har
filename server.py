@@ -169,7 +169,7 @@ def heuristic_classify(data):
         else:
             label, conf = 0, 0.4
 
-    probs = {ACTIVITY_LABELS[i]: 0.0 for i in range(6)}
+    probs = {ACTIVITY_LABELS[i]: 0.0 for i in ACTIVITY_LABELS}
     probs[ACTIVITY_LABELS[label]] = conf
     remaining = 1.0 - conf
     others = [k for k in probs if k != ACTIVITY_LABELS[label]]
@@ -198,7 +198,7 @@ def run_inference(data):
                 pred_idx = pred_idx.item()
                 conf = conf.item()
                 probs_np = probs_tensor.squeeze().cpu().numpy()
-                probs = {ACTIVITY_LABELS[i]: float(probs_np[i]) for i in range(6)}
+                probs = {ACTIVITY_LABELS[i]: float(probs_np[i]) for i in ACTIVITY_LABELS}
                 label = ACTIVITY_LABELS[pred_idx]
         except Exception:
             label, conf, probs = heuristic_classify(normed)

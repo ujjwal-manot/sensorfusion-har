@@ -1,0 +1,343 @@
+/*
+ * SensorFusion-HAR Lite — ESP32 + MPU6050 Human Activity Recognition
+ *
+ * 10-Class HAR: Walking, Sitting, Standing, Lying Down, Stairs Up,
+ *               Stairs Down, Jogging, Jumping, Soft Fall, Hard Collapse
+ *
+ * Hardware: ESP32 + MPU6050 (I2C)
+ * Inference: TensorFlow Lite for Microcontrollers (TFLM)
+ * Sampling: 50 Hz, 50-sample sliding window (1 second of data)
+ *
+ * Dependencies:
+ *   - Wire.h (built-in)
+ *   - TensorFlowLite_ESP32 library (install via Arduino Library Manager)
+ */
+
+#include <Wire.h>
+#include "model_data.h"
+
+#include "tensorflow/lite/micro/all_ops_resolver.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/schema/schema_generated.h"
+
+// ============================================================================
+// Configuration
+// ============================================================================
+#define MPU6050_ADDR       0x68
+#define SAMPLE_RATE_HZ     50
+#define SAMPLE_PERIOD_MS   (1000 / SAMPLE_RATE_HZ)
+#define TIME_STEPS         50
+#define NUM_CHANNELS       6
+#define NUM_CLASSES        10
+#define TENSOR_ARENA_SIZE  (40 * 1024)  // 40 KB — adjust if needed
+#define CONFIDENCE_THRESHOLD 0.3f       // minimum confidence to report activity
+
+// ============================================================================
+// Activity Labels
+// ============================================================================
+static const char* ACTIVITY_LABELS[NUM_CLASSES] = {
+    "Walking",
+    "Sitting",
+    "Standing",
+    "Lying Down",
+    "Stairs Up",
+    "Stairs Down",
+    "Jogging",
+    "Jumping",
+    "Soft Fall",
+    "Hard Collapse"
+};
+
+// ============================================================================
+// Per-channel normalization constants (from training)
+// UPDATE THESE with the actual values printed by the notebook!
+// ============================================================================
+static const float NORM_MEAN[NUM_CHANNELS] = {
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
+};
+static const float NORM_STD[NUM_CHANNELS] = {
+    1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f
+};
+
+// ============================================================================
+// Globals
+// ============================================================================
+static float sensor_buffer[TIME_STEPS][NUM_CHANNELS];
+static int buffer_idx = 0;
+static bool buffer_full = false;
+
+// TFLM
+static uint8_t tensor_arena[TENSOR_ARENA_SIZE] __attribute__((aligned(16)));
+static tflite::MicroInterpreter* interpreter = nullptr;
+static TfLiteTensor* input_tensor = nullptr;
+static TfLiteTensor* output_tensor = nullptr;
+
+// Timing
+static unsigned long last_sample_ms = 0;
+static unsigned long last_inference_ms = 0;
+
+// ============================================================================
+// MPU6050 Functions (direct register access, no external library needed)
+// ============================================================================
+void mpu6050_init() {
+    Wire.begin();
+    Wire.setClock(400000);  // 400 kHz I2C
+
+    // Wake up MPU6050
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x6B);  // PWR_MGMT_1
+    Wire.write(0x00);  // Wake up
+    Wire.endTransmission(true);
+
+    // Set accelerometer range to +/- 8g
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x1C);  // ACCEL_CONFIG
+    Wire.write(0x10);  // +/- 8g
+    Wire.endTransmission(true);
+
+    // Set gyroscope range to +/- 500 deg/s
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x1B);  // GYRO_CONFIG
+    Wire.write(0x08);  // +/- 500 deg/s
+    Wire.endTransmission(true);
+
+    // Set DLPF to 44Hz bandwidth
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x1A);  // CONFIG
+    Wire.write(0x03);  // DLPF_CFG = 3 (44Hz accel, 42Hz gyro)
+    Wire.endTransmission(true);
+
+    // Set sample rate divider for ~50Hz (if gyro output rate is 1kHz)
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x19);  // SMPLRT_DIV
+    Wire.write(19);    // 1000 / (1 + 19) = 50 Hz
+    Wire.endTransmission(true);
+}
+
+bool mpu6050_read(float* acc_x, float* acc_y, float* acc_z,
+                  float* gyro_x, float* gyro_y, float* gyro_z) {
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x3B);  // Start at ACCEL_XOUT_H
+    if (Wire.endTransmission(false) != 0) return false;
+
+    Wire.requestFrom((uint8_t)MPU6050_ADDR, (uint8_t)14, (uint8_t)true);
+    if (Wire.available() < 14) return false;
+
+    int16_t ax = (Wire.read() << 8) | Wire.read();
+    int16_t ay = (Wire.read() << 8) | Wire.read();
+    int16_t az = (Wire.read() << 8) | Wire.read();
+    Wire.read(); Wire.read();  // Skip temperature
+    int16_t gx = (Wire.read() << 8) | Wire.read();
+    int16_t gy = (Wire.read() << 8) | Wire.read();
+    int16_t gz = (Wire.read() << 8) | Wire.read();
+
+    // Convert to physical units
+    // Accel: +/- 8g range -> LSB sensitivity = 4096 LSB/g
+    *acc_x = (float)ax / 4096.0f;
+    *acc_y = (float)ay / 4096.0f;
+    *acc_z = (float)az / 4096.0f;
+
+    // Gyro: +/- 500 deg/s range -> LSB sensitivity = 65.5 LSB/(deg/s)
+    *gyro_x = (float)gx / 65.5f;
+    *gyro_y = (float)gy / 65.5f;
+    *gyro_z = (float)gz / 65.5f;
+
+    return true;
+}
+
+// ============================================================================
+// TFLM Setup
+// ============================================================================
+bool tflm_init() {
+    const tflite::Model* model = tflite::GetModel(model_tflite);
+    if (model->version() != TFLITE_SCHEMA_VERSION) {
+        Serial.println("ERROR: Model schema version mismatch!");
+        return false;
+    }
+
+    static tflite::AllOpsResolver resolver;
+
+    static tflite::MicroInterpreter static_interpreter(
+        model, resolver, tensor_arena, TENSOR_ARENA_SIZE
+    );
+    interpreter = &static_interpreter;
+
+    if (interpreter->AllocateTensors() != kTfLiteOk) {
+        Serial.println("ERROR: AllocateTensors() failed!");
+        return false;
+    }
+
+    input_tensor = interpreter->input(0);
+    output_tensor = interpreter->output(0);
+
+    Serial.print("Input tensor shape: [");
+    for (int i = 0; i < input_tensor->dims->size; i++) {
+        Serial.print(input_tensor->dims->data[i]);
+        if (i < input_tensor->dims->size - 1) Serial.print(", ");
+    }
+    Serial.println("]");
+
+    Serial.print("Output tensor shape: [");
+    for (int i = 0; i < output_tensor->dims->size; i++) {
+        Serial.print(output_tensor->dims->data[i]);
+        if (i < output_tensor->dims->size - 1) Serial.print(", ");
+    }
+    Serial.println("]");
+
+    Serial.print("Arena used: ");
+    Serial.print(interpreter->arena_used_bytes());
+    Serial.println(" bytes");
+
+    return true;
+}
+
+// ============================================================================
+// Inference
+// ============================================================================
+void run_inference() {
+    // Copy buffer to input tensor with normalization and quantization
+    if (input_tensor->type == kTfLiteInt8) {
+        // INT8 model: normalize then quantize
+        float input_scale = input_tensor->params.scale;
+        int32_t input_zp = input_tensor->params.zero_point;
+        int8_t* input_data = input_tensor->data.int8;
+        for (int t = 0; t < TIME_STEPS; t++) {
+            for (int c = 0; c < NUM_CHANNELS; c++) {
+                int idx = t * NUM_CHANNELS + c;
+                float normalized = (sensor_buffer[t][c] - NORM_MEAN[c]) / NORM_STD[c];
+                int32_t quantized = (int32_t)roundf(normalized / input_scale) + input_zp;
+                if (quantized < -128) quantized = -128;
+                if (quantized > 127) quantized = 127;
+                input_data[idx] = (int8_t)quantized;
+            }
+        }
+    } else {
+        // FP32 model: normalize only
+        float* input_data = input_tensor->data.f;
+        for (int t = 0; t < TIME_STEPS; t++) {
+            for (int c = 0; c < NUM_CHANNELS; c++) {
+                int idx = t * NUM_CHANNELS + c;
+                input_data[idx] = (sensor_buffer[t][c] - NORM_MEAN[c]) / NORM_STD[c];
+            }
+        }
+    }
+
+    // Run inference
+    unsigned long start_us = micros();
+    TfLiteStatus status = interpreter->Invoke();
+    unsigned long elapsed_us = micros() - start_us;
+
+    if (status != kTfLiteOk) {
+        Serial.println("ERROR: Inference failed!");
+        return;
+    }
+
+    // Dequantize output if INT8, then find argmax
+    float output_vals[NUM_CLASSES];
+    if (output_tensor->type == kTfLiteInt8) {
+        float output_scale = output_tensor->params.scale;
+        int32_t output_zp = output_tensor->params.zero_point;
+        int8_t* raw_output = output_tensor->data.int8;
+        for (int i = 0; i < NUM_CLASSES; i++) {
+            output_vals[i] = ((float)raw_output[i] - output_zp) * output_scale;
+        }
+    } else {
+        float* raw_output = output_tensor->data.f;
+        for (int i = 0; i < NUM_CLASSES; i++) {
+            output_vals[i] = raw_output[i];
+        }
+    }
+
+    int best_class = 0;
+    float best_score = output_vals[0];
+    for (int i = 1; i < NUM_CLASSES; i++) {
+        if (output_vals[i] > best_score) {
+            best_score = output_vals[i];
+            best_class = i;
+        }
+    }
+
+    // Apply softmax to get probability
+    float sum_exp = 0.0f;
+    float max_val = best_score;
+    for (int i = 0; i < NUM_CLASSES; i++) {
+        sum_exp += expf(output_vals[i] - max_val);
+    }
+    float confidence = 1.0f / sum_exp;
+
+    // Print result
+    if (confidence >= CONFIDENCE_THRESHOLD) {
+        Serial.print("Activity: ");
+        Serial.print(ACTIVITY_LABELS[best_class]);
+        Serial.print("  (conf: ");
+        Serial.print(confidence * 100.0f, 1);
+        Serial.print("%, ");
+        Serial.print(elapsed_us / 1000.0f, 1);
+        Serial.println(" ms)");
+    }
+
+    last_inference_ms = millis();
+}
+
+// ============================================================================
+// Arduino Setup & Loop
+// ============================================================================
+void setup() {
+    Serial.begin(115200);
+    while (!Serial) { delay(10); }
+
+    Serial.println("========================================");
+    Serial.println("SensorFusion-HAR Lite — ESP32 + MPU6050");
+    Serial.println("10-Class Human Activity Recognition");
+    Serial.println("========================================");
+
+    // Initialize MPU6050
+    Serial.print("Initializing MPU6050... ");
+    mpu6050_init();
+    Serial.println("OK");
+
+    // Initialize TFLM
+    Serial.print("Loading TFLite model... ");
+    if (!tflm_init()) {
+        Serial.println("FAILED! Halting.");
+        while (1) { delay(1000); }
+    }
+    Serial.println("OK");
+
+    Serial.println("Starting activity recognition...\n");
+    last_sample_ms = millis();
+}
+
+void loop() {
+    unsigned long now = millis();
+
+    // Sample at 50 Hz
+    if (now - last_sample_ms >= SAMPLE_PERIOD_MS) {
+        last_sample_ms = now;
+
+        float ax, ay, az, gx, gy, gz;
+        if (mpu6050_read(&ax, &ay, &az, &gx, &gy, &gz)) {
+            sensor_buffer[buffer_idx][0] = ax;
+            sensor_buffer[buffer_idx][1] = ay;
+            sensor_buffer[buffer_idx][2] = az;
+            sensor_buffer[buffer_idx][3] = gx;
+            sensor_buffer[buffer_idx][4] = gy;
+            sensor_buffer[buffer_idx][5] = gz;
+
+            buffer_idx++;
+
+            if (buffer_idx >= TIME_STEPS) {
+                run_inference();
+
+                // Shift buffer: keep last half for overlap
+                int overlap = TIME_STEPS / 2;
+                for (int i = 0; i < overlap; i++) {
+                    for (int c = 0; c < NUM_CHANNELS; c++) {
+                        sensor_buffer[i][c] = sensor_buffer[TIME_STEPS - overlap + i][c];
+                    }
+                }
+                buffer_idx = overlap;
+            }
+        }
+    }
+}
