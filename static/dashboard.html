@@ -3,63 +3,80 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SensorFusion HAR - Dashboard</title>
+<title>HAR - Dashboard</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;overflow-x:hidden}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0a0a0f;color:#e0e0e0}
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:#0d0d14;border-bottom:1px solid #1a1a2e}
-.topbar h1{font-size:1.1rem;font-weight:700;color:#7c8aff;letter-spacing:.5px}
-.topbar .status{display:flex;align-items:center;gap:8px;font-size:.8rem;color:#888}
-.topbar .dot{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s}
-.topbar .dot.on{background:#4CAF50;box-shadow:0 0 6px #4CAF5088}
-.grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto auto auto;gap:12px;padding:12px;height:calc(100vh - 52px)}
-.panel{background:#0d0d14;border:1px solid #1a1a2e;border-radius:10px;padding:16px;overflow:hidden;box-shadow:0 0 12px #0004}
-.panel-title{font-size:.65rem;text-transform:uppercase;letter-spacing:2px;color:#555;margin-bottom:10px;font-weight:600}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f5f6f8;color:#2c3e50}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:#fff;border-bottom:1px solid #e1e4e8;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.topbar h1{font-size:1.15rem;font-weight:600;color:#1a1a2e;letter-spacing:0}
+.topbar .status{display:flex;align-items:center;gap:8px;font-size:.8rem;color:#666}
+.topbar .dot{width:8px;height:8px;border-radius:50%;background:#ccc;transition:background .3s}
+.topbar .dot.on{background:#27ae60}
+
+.grid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:240px minmax(320px,1fr) auto;gap:16px;padding:20px;height:calc(100vh - 60px);max-width:1400px;margin:0 auto}
+.grid > .panel:nth-child(1){grid-column:1/-1}
+.grid > .panel:nth-child(5){grid-column:1/-1}
+
+.panel{background:#fff;border:1px solid #e1e4e8;border-radius:8px;padding:20px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.empty-state{height:calc(100% - 30px);display:flex;align-items:center;justify-content:center;text-align:center;color:#8898aa;font-size:.9rem;line-height:1.5;padding:20px}
+.panel-title{font-size:.7rem;text-transform:uppercase;letter-spacing:1.5px;color:#8898aa;margin-bottom:14px;font-weight:600}
 .panel.full{grid-column:1/-1}
 .mono{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace}
-.waveform-row{display:flex;gap:12px;height:100%}
+
+.waveform-row{display:none;gap:20px;height:calc(100% - 30px)}
 .waveform-col{flex:1;display:flex;flex-direction:column}
-.waveform-col .chart-label{font-size:.6rem;text-transform:uppercase;letter-spacing:1.5px;color:#444;margin-bottom:4px;font-weight:600}
-.waveform-col canvas{flex:1;width:100%;border-radius:6px;background:#08080e}
-.activity-display{display:flex;flex-direction:column;align-items:center;justify-content:center;height:calc(100% - 24px)}
-.activity-name{font-size:2.4rem;font-weight:800;transition:color .4s;text-align:center}
-.confidence-wrap{width:100%;max-width:260px;margin-top:14px}
-.confidence-bar-bg{width:100%;height:8px;background:#1a1a2e;border-radius:4px;overflow:hidden}
-.confidence-bar-fill{height:100%;border-radius:4px;transition:width .4s,background .4s;width:0}
-.confidence-text{font-size:.75rem;color:#666;margin-top:6px;text-align:center}
-.prob-list{display:flex;flex-direction:column;gap:8px;height:calc(100% - 24px);justify-content:center}
-.prob-row{display:flex;align-items:center;gap:10px}
-.prob-label{width:110px;font-size:.72rem;color:#aaa;text-align:right;flex-shrink:0}
-.prob-bar-bg{flex:1;height:18px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative}
-.prob-bar-fill{height:100%;border-radius:4px;transition:width .4s;width:0}
-.prob-pct{width:42px;font-size:.72rem;color:#777;text-align:left;flex-shrink:0}
-.timeline-strip{display:flex;gap:2px;align-items:flex-end;height:calc(100% - 24px);overflow:hidden}
-.timeline-block{flex:0 0 auto;width:18px;height:100%;border-radius:3px;transition:background .3s}
-.telemetry-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;height:calc(100% - 24px);align-content:center}
-.tel-item{text-align:center;padding:8px}
-.tel-item .tel-label{font-size:.6rem;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
-.tel-item .tel-value{font-size:1.3rem;font-weight:700;color:#7c8aff}
-.tel-item.wide{grid-column:1/-1}
-@media(max-width:900px){
-.grid{grid-template-columns:1fr;grid-template-rows:auto auto auto auto auto}
-.panel.full{grid-column:1}
+.waveform-col .chart-label{font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:#8898aa;margin-bottom:6px;font-weight:600}
+.waveform-col canvas{flex:1;width:100%;border-radius:4px;background:#fafbfc;border:1px solid #e1e4e8}
+
+.activity-display{display:flex;flex-direction:column;align-items:center;justify-content:center;height:calc(100% - 30px);min-height:140px}
+.activity-name{font-size:2rem;font-weight:700;transition:color .3s;text-align:center;color:#1a1a2e}
+.confidence-wrap{width:100%;max-width:220px;margin-top:16px}
+.confidence-bar-bg{width:100%;height:6px;background:#e1e4e8;border-radius:3px;overflow:hidden}
+.confidence-bar-fill{height:100%;border-radius:3px;transition:width .3s,background .3s;width:0;background:#3498db}
+.confidence-text{font-size:.75rem;color:#8898aa;margin-top:8px;text-align:center}
+
+.prob-list{display:flex;flex-direction:column;gap:6px;height:calc(100% - 30px);justify-content:center;overflow:visible}
+.prob-row{display:flex;align-items:center;gap:12px}
+.prob-label{width:112px;font-size:.7rem;color:#525f7f;text-align:right;flex-shrink:0;font-weight:500}
+.prob-bar-bg{flex:1;height:16px;background:#f1f3f5;border-radius:4px;overflow:hidden;position:relative;border:1px solid #e1e4e8}
+.prob-bar-fill{height:100%;border-radius:3px;transition:width .3s;width:0}
+.prob-pct{width:40px;font-size:.72rem;color:#8898aa;text-align:left;flex-shrink:0;font-family:monospace}
+
+.timeline-strip{display:flex;gap:3px;align-items:flex-end;height:calc(100% - 30px);overflow:hidden;padding:4px 0}
+.timeline-block{flex:0 0 auto;width:20px;height:100%;border-radius:4px;transition:background .3s;opacity:.85}
+
+.telemetry-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:16px;height:calc(100% - 30px);align-content:center}
+.tel-item{text-align:center;padding:10px;background:#fafbfc;border-radius:6px;border:1px solid #e1e4e8}
+.tel-item .tel-label{font-size:.65rem;color:#8898aa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;font-weight:600}
+.tel-item .tel-value{font-size:1.2rem;font-weight:700;color:#2c3e50}
+
+@media(max-width:1000px){
+.grid{grid-template-columns:1fr 1fr}
+.panel.full{grid-column:1/-1}
+}
+@media(max-width:700px){
+.grid{grid-template-columns:1fr;grid-template-rows:auto;padding:12px;height:auto}
+.panel{min-height:180px}
 .waveform-row{flex-direction:column;height:auto}
 .waveform-col canvas{height:120px}
+.telemetry-grid{grid-template-columns:1fr 1fr}
 }
 </style>
 </head>
 <body>
 <div class="topbar">
-<h1>SensorFusion HAR Dashboard</h1>
+<h1>HAR</h1>
 <div class="status">
 <div class="dot" id="connDot"></div>
 <span id="connLabel">Disconnected</span>
 </div>
 </div>
 <div class="grid">
-<div class="panel full" id="wavePanel" style="min-height:220px">
+<div class="panel full" id="wavePanel" style="min-height:200px">
 <div class="panel-title">Live Waveforms</div>
+<div class="empty-state" id="waveEmpty">Connect the phone and tap Start Streaming. Waiting for motion samples...</div>
 <div class="waveform-row">
 <div class="waveform-col">
 <div class="chart-label">Accelerometer (m/s²)</div>
@@ -71,6 +88,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 </div>
 </div>
 </div>
+
 <div class="panel" id="activityPanel">
 <div class="panel-title">Activity Prediction</div>
 <div class="activity-display">
@@ -81,29 +99,34 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 </div>
 </div>
 </div>
+
 <div class="panel" id="probPanel">
 <div class="panel-title">Probability Distribution</div>
 <div class="prob-list" id="probList"></div>
 </div>
+
 <div class="panel" id="timelinePanel">
 <div class="panel-title">Activity Timeline</div>
 <div class="timeline-strip" id="timelineStrip"></div>
 </div>
-<div class="panel" id="telemetryPanel">
+
+<div class="panel full" id="telemetryPanel">
 <div class="panel-title">System Telemetry</div>
 <div class="telemetry-grid">
 <div class="tel-item"><div class="tel-label">Sampling Rate</div><div class="tel-value mono" id="telRate">0 Hz</div></div>
-<div class="tel-item"><div class="tel-label">Buffer Fill</div><div class="tel-value mono" id="telBuffer">0/128</div></div>
+<div class="tel-item"><div class="tel-label">Buffer Fill</div><div class="tel-value mono" id="telBuffer">0/50</div></div>
 <div class="tel-item"><div class="tel-label">Inference Time</div><div class="tel-value mono" id="telInference">0 ms</div></div>
 <div class="tel-item"><div class="tel-label">Predictions</div><div class="tel-value mono" id="telPredictions">0</div></div>
-<div class="tel-item wide"><div class="tel-label">Connection Uptime</div><div class="tel-value mono" id="telUptime">00:00:00</div></div>
+<div class="tel-item"><div class="tel-label">Spectral Radius</div><div class="tel-value mono" id="telSR">--</div></div>
+<div class="tel-item"><div class="tel-label">Uptime</div><div class="tel-value mono" id="telUptime">00:00:00</div></div>
+<div class="tel-item"><div class="tel-label">Status</div><div class="tel-value mono" id="telStatus">Idle</div></div>
 </div>
 </div>
 </div>
 <script>
 (function(){
-var ACTIVITIES=["Walking","Walking Upstairs","Walking Downstairs","Sitting","Standing","Laying"];
-var COLORS={"Walking":"#4CAF50","Walking Upstairs":"#FF9800","Walking Downstairs":"#2196F3","Sitting":"#9C27B0","Standing":"#F44336","Laying":"#00BCD4"};
+var ACTIVITIES=["Walking","Sitting","Standing","Lying Down","Stairs Up","Stairs Down","Jogging","Jumping","Cycling","Running","Waist Bending"];
+var COLORS={"Walking":"#4CAF50","Sitting":"#9C27B0","Standing":"#F44336","Lying Down":"#00BCD4","Stairs Up":"#FF9800","Stairs Down":"#2196F3","Jogging":"#8BC34A","Jumping":"#FFEB3B","Cycling":"#795548","Running":"#E91E63","Waist Bending":"#607D8B"};
 var WINDOW=200;
 var TIMELINE_MAX=30;
 
@@ -124,16 +147,19 @@ var connDot=document.getElementById("connDot");
 var connLabel=document.getElementById("connLabel");
 var accelCanvas=document.getElementById("accelCanvas");
 var gyroCanvas=document.getElementById("gyroCanvas");
+var waveRow=document.querySelector(".waveform-row");
 var activityName=document.getElementById("activityName");
 var confBar=document.getElementById("confBar");
 var confText=document.getElementById("confText");
 var probList=document.getElementById("probList");
 var timelineStrip=document.getElementById("timelineStrip");
+var waveEmpty=document.getElementById("waveEmpty");
 var telRate=document.getElementById("telRate");
 var telBuffer=document.getElementById("telBuffer");
 var telInference=document.getElementById("telInference");
 var telPredictions=document.getElementById("telPredictions");
 var telUptime=document.getElementById("telUptime");
+var telStatus=document.getElementById("telStatus");
 
 var accelCtx=accelCanvas.getContext("2d");
 var gyroCtx=gyroCanvas.getContext("2d");
@@ -200,6 +226,8 @@ telUptime.textContent=(h<10?"0":"")+h+":"+(m<10?"0":"")+m+":"+(s<10?"0":"")+s;
 function pushData(arr,val){
 arr.push(val);
 if(arr.length>WINDOW)arr.shift();
+if(waveEmpty)waveEmpty.style.display="none";
+if(waveRow)waveRow.style.display="flex";
 }
 
 function resizeCanvas(canvas){
@@ -237,7 +265,7 @@ minV-=range*0.1;
 maxV+=range*0.1;
 range=maxV-minV;
 
-ctx.strokeStyle="#1a1a2e";
+ctx.strokeStyle="#e1e4e8";
 ctx.lineWidth=dpr*0.5;
 for(var g=0;g<=4;g++){
 var gy=h-(g/4)*h;
@@ -246,22 +274,17 @@ ctx.moveTo(0,gy);
 ctx.lineTo(w,gy);
 ctx.stroke();
 }
-for(var g=0;g<=8;g++){
-var gx=(g/8)*w;
-ctx.beginPath();
-ctx.moveTo(gx,0);
-ctx.lineTo(gx,h);
-ctx.stroke();
-}
 
-ctx.strokeStyle="#333";
+ctx.strokeStyle="#8898aa";
 ctx.lineWidth=dpr*0.5;
 var zeroY=h-((0-minV)/range)*h;
 if(zeroY>0&&zeroY<h){
 ctx.beginPath();
+ctx.setLineDash([2*dpr,2*dpr]);
 ctx.moveTo(0,zeroY);
 ctx.lineTo(w,zeroY);
 ctx.stroke();
+ctx.setLineDash([]);
 }
 
 for(var d=0;d<datasets.length;d++){
@@ -272,15 +295,15 @@ ctx.lineWidth=dpr*1.5;
 ctx.lineJoin="round";
 ctx.beginPath();
 for(var i=0;i<data.length;i++){
-var x=(i/(WINDOW-1))*w;
-var y=h-((data[i]-minV)/range)*h;
-if(i===0)ctx.moveTo(x,y);
-else ctx.lineTo(x,y);
+var px=(i/(WINDOW-1))*w;
+var py=h-((data[i]-minV)/range)*h;
+if(i===0)ctx.moveTo(px,py);
+else ctx.lineTo(px,py);
 }
 ctx.stroke();
 }
 
-ctx.fillStyle="#555";
+ctx.fillStyle="#8898aa";
 ctx.font=(10*dpr)+"px monospace";
 ctx.textAlign="left";
 ctx.fillText(maxV.toFixed(1),4*dpr,12*dpr);
@@ -288,8 +311,8 @@ ctx.fillText(minV.toFixed(1),4*dpr,h-4*dpr);
 }
 
 function render(){
-drawChart(accelCtx,accelCanvas,[accelData.x,accelData.y,accelData.z],["#F44336","#4CAF50","#2196F3"]);
-drawChart(gyroCtx,gyroCanvas,[gyroData.x,gyroData.y,gyroData.z],["#FF9800","#00BCD4","#E040FB"]);
+drawChart(accelCtx,accelCanvas,[accelData.x,accelData.y,accelData.z],["#e74c3c","#27ae60","#3498db"]);
+drawChart(gyroCtx,gyroCanvas,[gyroData.x,gyroData.y,gyroData.z],["#e67e22","#1abc9c","#9b59b6"]);
 requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
@@ -335,7 +358,8 @@ block.title="";
 function connectWS(){
 if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
 try{
-ws=new WebSocket("ws://"+window.location.host+"/ws/dashboard");
+var scheme=window.location.protocol==="https:"?"wss://":"ws://";
+ws=new WebSocket(scheme+window.location.host+"/ws/dashboard");
 }catch(e){
 setConn(false);
 scheduleReconnect();
@@ -372,8 +396,17 @@ totalPredictions++;
 telPredictions.textContent=totalPredictions;
 addTimeline(msg.activity);
 }
-if(msg.buffer_size!==undefined)telBuffer.textContent=msg.buffer_size+"/128";
+if(msg.buffer_size!==undefined)telBuffer.textContent=msg.buffer_size+"/50";
 if(msg.inference_time_ms!==undefined)telInference.textContent=msg.inference_time_ms+" ms";
+if(msg.spectral_radius!==undefined)document.getElementById("telSR").textContent=msg.spectral_radius.toFixed(4);
+if(msg.status!==undefined){
+telStatus.textContent=msg.status;
+if(waveEmpty&&accelData.x.length===0){
+waveEmpty.textContent=msg.status+". The dashboard will draw waveforms after the phone sends motion samples.";
+waveEmpty.style.display="flex";
+}
+}
+if(msg.phone_connected!==undefined&&msg.phone_connected<1&&!msg.status)telStatus.textContent="Waiting for phone";
 }catch(e){}
 };
 }

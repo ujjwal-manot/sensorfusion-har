@@ -1,0 +1,41 @@
+{
+  "datasets": [
+    "UCI-HAR total_acc+gyro",
+    "PAMAP2 hand acc+gyro",
+    "MHEALTH right-arm acc+gyro"
+  ],
+  "mhealth_mapping": {
+    "1": "Standing",
+    "2": "Sitting",
+    "3": "Lying Down",
+    "4": "Walking",
+    "6": "Waist Bending",
+    "9": "Cycling",
+    "10": "Jogging",
+    "11": "Running",
+    "12": "Jumping"
+  },
+  "realworld_mapping": {
+    "walking": "Walking",
+    "sitting": "Sitting",
+    "standing": "Standing",
+    "lying": "Lying Down",
+    "climbingup": "Stairs Up",
+    "climbingdown": "Stairs Down",
+    "running": "Running",
+    "jumping": "Jumping"
+  },
+  "labels": [
+    "Walking",
+    "Sitting",
+    "Standing",
+    "Lying Down",
+    "Stairs Up",
+    "Stairs Down",
+    "Jogging",
+    "Jumping",
+    "Cycling",
+    "Running",
+    "Waist Bending"
+  ]
+}

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import socket
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -14,31 +15,36 @@ from fastapi.staticfiles import StaticFiles
 
 ACTIVITY_LABELS = {
     0: "Walking",
-    1: "Walking Upstairs",
-    2: "Walking Downstairs",
-    3: "Sitting",
-    4: "Standing",
-    5: "Laying",
+    1: "Sitting",
+    2: "Standing",
+    3: "Lying Down",
+    4: "Stairs Up",
+    5: "Stairs Down",
+    6: "Jogging",
+    7: "Jumping",
+    8: "Cycling",
+    9: "Running",
+    10: "Waist Bending",
 }
 
 CHANNEL_STATS = None
 
 DEFAULT_CHANNEL_STATS = {
-    "ax": {"mean": -0.5016, "std": 0.5592},
-    "ay": {"mean": 0.7806, "std": 0.5129},
-    "az": {"mean": -0.0455, "std": 0.4037},
-    "gx": {"mean": -0.0249, "std": 0.4524},
-    "gy": {"mean": 0.0786, "std": 0.3516},
-    "gz": {"mean": 0.0049, "std": 0.3291},
+    "ax": {"mean": -3.1886, "std": 6.3021},
+    "ay": {"mean": 1.2004, "std": 6.4955},
+    "az": {"mean": 2.4553, "std": 3.8114},
+    "gx": {"mean": -0.0335, "std": 1.0867},
+    "gy": {"mean": -0.0226, "std": 0.8431},
+    "gz": {"mean": 0.0530, "std": 1.2929},
 }
 
 CHANNEL_ORDER = ["ax", "ay", "az", "gx", "gy", "gz"]
-WINDOW_SIZE = 128
-STRIDE = 64
+WINDOW_SIZE = 50
+STRIDE = 25
 TARGET_HZ = 50
 
 BASE_DIR = Path(__file__).resolve().parent
-CHECKPOINT_PATH = BASE_DIR / "checkpoints" / "best_model.pt"
+CHECKPOINT_PATH = BASE_DIR / "final_esp32_v2_useful11_package" / "checkpoints_v2" / "best_sensorfusion_esp32_v2_useful11_final.pt"
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -69,10 +75,11 @@ def load_model():
         CHANNEL_STATS = DEFAULT_CHANNEL_STATS
         return
     try:
-        from model.sensorfusion import SensorFusionHAR
+        sys.path.insert(0, str(BASE_DIR / "final_esp32_v2_useful11_package"))
+        from train_esp32_v2_expanded_local import SensorFusionESP32
         state = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
-        num_classes = state.get("num_classes", 6)
-        model = SensorFusionHAR(num_classes=num_classes)
+        num_classes = state.get("num_classes", 11)
+        model = SensorFusionESP32(input_channels=6, reservoir_size=64, num_classes=num_classes)
         if "model_state_dict" in state:
             model.load_state_dict(state["model_state_dict"], strict=False)
         else:
@@ -80,18 +87,19 @@ def load_model():
         model.to(device)
         model.eval()
 
-        norm_stats = state.get("normalization_stats", None)
-        stats_file = CHECKPOINT_PATH.parent / "normalization_stats.json"
+        norm_stats = state.get("normalization", state.get("normalization_stats", None))
+        stats_file = CHECKPOINT_PATH.parent.parent / "exports" / "esp32_v2" / "normalization_stats.json"
         if norm_stats is None and stats_file.exists():
             with open(stats_file) as f:
                 norm_stats = json.load(f)
 
         if norm_stats is not None:
-            means = norm_stats["means"]
-            stds = norm_stats["stds"]
+            means = norm_stats.get("mean", norm_stats.get("means", []))
+            stds = norm_stats.get("std", norm_stats.get("stds", []))
             CHANNEL_STATS = {}
             for i, ch in enumerate(CHANNEL_ORDER):
-                CHANNEL_STATS[ch] = {"mean": means[i], "std": stds[i]}
+                if i < len(means) and i < len(stds):
+                    CHANNEL_STATS[ch] = {"mean": means[i], "std": stds[i]}
             print("[server] Normalization stats loaded from checkpoint")
         else:
             CHANNEL_STATS = DEFAULT_CHANNEL_STATS
@@ -147,27 +155,34 @@ def heuristic_classify(data):
     gyro_std = np.mean(np.std(gyro, axis=0))
     acc_var = np.mean(np.var(acc, axis=0))
 
+    # Heuristic rules for 11-class HAR
     if acc_var < 0.005 and gyro_std < 0.01:
         if acc_mag_mean < 0.5:
-            label, conf = 5, 0.7
+            label, conf = 3, 0.7   # Lying Down
         elif abs(acc[:, 1].mean()) > 0.8:
-            label, conf = 4, 0.55
+            label, conf = 2, 0.55  # Standing
         else:
-            label, conf = 3, 0.5
+            label, conf = 1, 0.5   # Sitting
     elif acc_mag_std > 0.8 or gyro_std > 0.5:
         vert_acc = acc[:, 2]
         vert_trend = np.polyfit(np.arange(len(vert_acc)), vert_acc, 1)[0]
         if vert_trend > 0.003:
-            label, conf = 1, 0.45
+            label, conf = 4, 0.45  # Stairs Up
         elif vert_trend < -0.003:
-            label, conf = 2, 0.45
+            label, conf = 5, 0.45  # Stairs Down
+        elif gyro_std > 1.5:
+            label, conf = 7, 0.5   # Jumping
+        elif acc_mag_mean > 2.0:
+            label, conf = 9, 0.5   # Running
         else:
-            label, conf = 0, 0.6
+            label, conf = 6, 0.45  # Jogging
     else:
         if acc_mag_std < 0.15:
-            label, conf = 4, 0.4
+            label, conf = 2, 0.4   # Standing
+        elif gyro_std > 0.3:
+            label, conf = 10, 0.4  # Waist Bending
         else:
-            label, conf = 0, 0.4
+            label, conf = 0, 0.4   # Walking
 
     probs = {ACTIVITY_LABELS[i]: 0.0 for i in ACTIVITY_LABELS}
     probs[ACTIVITY_LABELS[label]] = conf
@@ -188,11 +203,16 @@ def run_inference(data):
     resampled = resample_to_fixed_rate(timestamps, values, TARGET_HZ, WINDOW_SIZE)
     normed = normalize(resampled)
 
+    spectral_radius = None
     if model is not None:
         try:
             tensor = torch.FloatTensor(normed).unsqueeze(0).to(device)
             with torch.no_grad():
-                logits = model(tensor)
+                if hasattr(model, 'forward') and 'return_aux' in model.forward.__code__.co_varnames:
+                    logits, aux = model(tensor, return_aux=True)
+                    spectral_radius = float(aux.get('spectral_radius', 0))
+                else:
+                    logits = model(tensor)
                 probs_tensor = torch.softmax(logits, dim=1)
                 conf, pred_idx = torch.max(probs_tensor, dim=1)
                 pred_idx = pred_idx.item()
@@ -200,19 +220,23 @@ def run_inference(data):
                 probs_np = probs_tensor.squeeze().cpu().numpy()
                 probs = {ACTIVITY_LABELS[i]: float(probs_np[i]) for i in ACTIVITY_LABELS}
                 label = ACTIVITY_LABELS[pred_idx]
-        except Exception:
+        except Exception as e:
+            print(f"[server] Model inference error: {e}")
             label, conf, probs = heuristic_classify(normed)
     else:
         label, conf, probs = heuristic_classify(normed)
 
     elapsed = (time.perf_counter() - t0) * 1000
 
-    return {
+    result = {
         "prediction": label,
         "confidence": round(conf, 4),
         "probabilities": {k: round(v, 4) for k, v in probs.items()},
         "inference_time_ms": round(elapsed, 2),
     }
+    if spectral_radius is not None:
+        result["spectral_radius"] = round(spectral_radius, 4)
+    return result
 
 
 async def broadcast_to_dashboards(message):
@@ -244,6 +268,12 @@ async def phone_ws(websocket: WebSocket):
     await websocket.accept()
     phone_clients.add(websocket)
     print(f"[server] Phone connected ({len(phone_clients)} active)")
+    await broadcast_to_dashboards({
+        "phone_connected": len(phone_clients),
+        "status": "Phone connected",
+        "buffer_size": len(sensor_buffer),
+        "inference_time_ms": 0.0,
+    })
 
     try:
         while True:
@@ -253,12 +283,29 @@ async def phone_ws(websocket: WebSocket):
             except json.JSONDecodeError:
                 continue
 
+            if data.get("type") in {"stream_start", "stream_stop", "heartbeat"}:
+                status_map = {
+                    "stream_start": "Phone started - waiting for motion samples",
+                    "stream_stop": "Phone streaming stopped",
+                    "heartbeat": "Phone connected - no motion samples yet",
+                }
+                await broadcast_to_dashboards({
+                    "phone_connected": len(phone_clients),
+                    "status": status_map.get(data.get("type"), "Phone connected"),
+                    "buffer_size": len(sensor_buffer),
+                    "inference_time_ms": 0.0,
+                })
+                continue
+
             required = {"ax", "ay", "az", "gx", "gy", "gz", "t"}
             if not required.issubset(data.keys()):
+                print(f"[server] Phone data missing keys: {data.keys()}")
                 continue
 
             sensor_buffer.append(data)
             samples_since_inference += 1
+            if samples_since_inference % 50 == 0:
+                print(f"[server] Phone samples: {len(sensor_buffer)}, since_last: {samples_since_inference}")
 
             latest_sensor = {ch: data[ch] for ch in CHANNEL_ORDER}
 
@@ -273,7 +320,11 @@ async def phone_ws(websocket: WebSocket):
                     "inference_time_ms": result["inference_time_ms"],
                     "sensor": latest_sensor,
                     "buffer_size": len(sensor_buffer),
+                    "phone_connected": len(phone_clients),
+                    "status": "Streaming",
                 }
+                if "spectral_radius" in result:
+                    msg["spectral_radius"] = result["spectral_radius"]
                 await broadcast_to_dashboards(msg)
                 try:
                     await websocket.send_text(json.dumps({"activity": msg["activity"], "confidence": msg["confidence"]}))
@@ -287,6 +338,8 @@ async def phone_ws(websocket: WebSocket):
                     "sensor": latest_sensor,
                     "buffer_size": len(sensor_buffer),
                     "inference_time_ms": 0.0,
+                    "phone_connected": len(phone_clients),
+                    "status": "Collecting",
                 })
 
     except WebSocketDisconnect:
@@ -296,6 +349,12 @@ async def phone_ws(websocket: WebSocket):
     finally:
         phone_clients.discard(websocket)
         print(f"[server] Phone disconnected ({len(phone_clients)} active)")
+        await broadcast_to_dashboards({
+            "phone_connected": len(phone_clients),
+            "status": "Phone disconnected",
+            "buffer_size": len(sensor_buffer),
+            "inference_time_ms": 0.0,
+        })
 
 
 @app.websocket("/ws/dashboard")
@@ -303,6 +362,15 @@ async def dashboard_ws(websocket: WebSocket):
     await websocket.accept()
     dashboard_clients.add(websocket)
     print(f"[server] Dashboard connected ({len(dashboard_clients)} active)")
+    try:
+        await websocket.send_text(json.dumps({
+            "phone_connected": len(phone_clients),
+            "status": "Ready" if phone_clients else "Waiting for phone",
+            "buffer_size": len(sensor_buffer),
+            "inference_time_ms": 0.0,
+        }))
+    except Exception:
+        pass
 
     try:
         while True:
@@ -320,14 +388,63 @@ async def dashboard_ws(websocket: WebSocket):
 async def startup():
     load_model()
     ip = get_local_ip()
-    port = 8765
-    print(f"\n{'=' * 50}")
-    print(f"  SensorFusion-HAR Server")
-    print(f"  Dashboard:  http://{ip}:{port}/")
-    print(f"  Phone:      http://{ip}:{port}/phone")
-    print(f"  QR target:  http://{ip}:{port}/phone")
-    print(f"{'=' * 50}\n")
+    print(f"\n{'=' * 60}")
+    print(f"  HAR Server (V2 - 11 classes)")
+    print(f"  Dashboard:  https://{ip}:8443/")
+    print(f"  Phone:      https://{ip}:8443/phone")
+    print(f"  HTTP:       http://{ip}:8765/  (redirects to HTTPS)")
+    print(f"  Note: Accept the self-signed certificate warning once on each device.")
+    print(f"        Both phone and dashboard MUST use HTTPS for sensors to work.")
+    print(f"{'=' * 60}\n")
+
+
+def _build_redirect_app(target_host: str, https_port: int):
+    """Tiny ASGI app that redirects every HTTP request to the HTTPS server."""
+    from starlette.applications import Starlette
+    from starlette.responses import RedirectResponse
+    from starlette.routing import Route
+
+    async def redirect_all(request):
+        target = f"https://{target_host}:{https_port}{request.url.path}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        return RedirectResponse(url=target, status_code=307)
+
+    return Starlette(routes=[Route("/{path:path}", endpoint=redirect_all)])
 
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8765, reload=False, log_level="info")
+    import threading
+    from generate_cert import generate_cert
+
+    cert_dir = BASE_DIR / "certs"
+    ip = get_local_ip()
+    cert_file, key_file = generate_cert(cert_dir, ip)
+
+    https_port = 8443
+    http_port = 8765
+
+    # HTTP server in a background thread - only redirects to HTTPS.
+    redirect_app = _build_redirect_app(ip, https_port)
+
+    def _run_http_redirect():
+        config = uvicorn.Config(
+            app=redirect_app,
+            host="0.0.0.0",
+            port=http_port,
+            log_level="warning",
+        )
+        uvicorn.Server(config).run()
+
+    threading.Thread(target=_run_http_redirect, daemon=True).start()
+
+    # Main HTTPS server runs in foreground - all real app state lives here.
+    config = uvicorn.Config(
+        app=app,
+        host="0.0.0.0",
+        port=https_port,
+        log_level="info",
+        ssl_certfile=str(cert_file),
+        ssl_keyfile=str(key_file),
+    )
+    uvicorn.Server(config).run()

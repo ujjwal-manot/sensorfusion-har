@@ -1,0 +1,30 @@
+{
+  "accuracy": 0.8747404844290657,
+  "macro_f1": 0.881504819360888,
+  "min_f1": 0.722007722007722,
+  "per_class_f1": {
+    "Walking": 0.9242752055387278,
+    "Sitting": 0.8382999511480215,
+    "Standing": 0.8093612871769869,
+    "Lying Down": 0.9287377736376339,
+    "Stairs Up": 0.8452296819787986,
+    "Stairs Down": 0.8153256704980842,
+    "Jogging": 0.968,
+    "Jumping": 0.722007722007722,
+    "Cycling": 0.9520123839009288,
+    "Running": 0.906636670416198,
+    "Waist Bending": 0.9866666666666667
+  },
+  "parameter_count": 75290,
+  "fp32_size_kb": 294.1015625,
+  "history": [],
+  "config": {
+    "msm_epochs": 10,
+    "head_epochs": 16,
+    "ft_epochs": 0,
+    "batch_size": 128,
+    "include_mhealth": true,
+    "prototype_weight": 0.0,
+    "prototype_warmup": 5
+  }
+}
