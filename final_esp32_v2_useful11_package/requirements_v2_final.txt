@@ -1,0 +1,11 @@
+numpy
+scipy
+scikit-learn
+matplotlib
+torch
+onnx
+pytest
+# Optional Colab/Python 3.10-3.11 deployment conversion dependencies:
+# tensorflow
+# onnx2tf
+# ai-edge-litert
