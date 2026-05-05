@@ -85,17 +85,18 @@ var latestAccel={x:0,y:0,z:0};
 var latestGyro={x:0,y:0,z:0};
 var sensorInterval=null;
 var activityColors={
+"WALKING":"#4CAF50",
+"WALKING_UP":"#FF9800",
+"WALKING_DOWN":"#2196F3",
+"SITTING":"#9C27B0",
+"STANDING":"#F44336",
+"LAYING":"#00BCD4",
 "Walking":"#4CAF50",
+"Walking Upstairs":"#FF9800",
+"Walking Downstairs":"#2196F3",
 "Sitting":"#9C27B0",
 "Standing":"#F44336",
-"Lying Down":"#00BCD4",
-"Stairs Up":"#FF9800",
-"Stairs Down":"#2196F3",
-"Jogging":"#8BC34A",
-"Jumping":"#FFEB3B",
-"Cycling":"#795548",
-"Running":"#E91E63",
-"Waist Bending":"#607D8B"
+"Laying":"#00BCD4"
 };
 
 var btn=document.getElementById("startBtn");
@@ -184,12 +185,9 @@ console.log("[phone] Motion event but WS not open");
 return;
 }
 
-var accel=e.acceleration;
 var ax=0,ay=0,az=0;
-if(accel&&accel.x!==null&&accel.x!==undefined){
-ax=accel.x;ay=accel.y;az=accel.z;
-}else if(e.accelerationIncludingGravity){
 var ag=e.accelerationIncludingGravity;
+if(ag&&ag.x!==null&&ag.x!==undefined){
 ax=ag.x||0;ay=ag.y||0;az=ag.z||0;
 }
 
@@ -255,20 +253,20 @@ if(sampleCount===1)connInfo.textContent="Streaming sensor data. Keep this tab op
 }
 
 function startGenericSensors(){
-if(!("Accelerometer" in window)&&!("Gyroscope" in window))return false;
+if(!('Accelerometer' in window)&&!('Gyroscope' in window))return false;
 try{
-if("Accelerometer" in window){
+if('Accelerometer' in window){
 accelSensor=new Accelerometer({frequency:50});
-accelSensor.addEventListener("reading",function(){
+accelSensor.addEventListener('reading',function(){
 latestAccel.x=accelSensor.x||0;
 latestAccel.y=accelSensor.y||0;
 latestAccel.z=accelSensor.z||0;
 });
 accelSensor.start();
 }
-if("Gyroscope" in window){
+if('Gyroscope' in window){
 gyroSensor=new Gyroscope({frequency:50});
-gyroSensor.addEventListener("reading",function(){
+gyroSensor.addEventListener('reading',function(){
 latestGyro.x=gyroSensor.x||0;
 latestGyro.y=gyroSensor.y||0;
 latestGyro.z=gyroSensor.z||0;
@@ -279,20 +277,23 @@ if(sensorInterval)clearInterval(sensorInterval);
 sensorInterval=setInterval(function(){
 sendSensorSample(latestAccel.x,latestAccel.y,latestAccel.z,latestGyro.x,latestGyro.y,latestGyro.z);
 },20);
-connInfo.textContent="Using Android sensor API. Move the phone to stream samples.";
+connInfo.textContent='Using Android sensor API. Move the phone to stream samples.';
 return true;
-}catch(e){
-connInfo.textContent="Android sensor API is blocked. If this is HTTP, open the phone page over HTTPS or allow this origin as secure in Chrome flags.";
+}catch(err){
+connInfo.textContent='Android sensor API is blocked. Falling back to DeviceMotion.';
 return false;
 }
 }
 
 function startStreaming(){
 streaming=true;
-btn.textContent="Stop Streaming";
-btn.classList.add("active");
-try{if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:"stream_start",t:Date.now()}));}catch(e){}
-startGenericSensors();
+btn.textContent='Stop Streaming';
+btn.classList.add('active');
+try{if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'stream_start',t:Date.now()}));}catch(e){}
+var usedGeneric=startGenericSensors();
+if(!usedGeneric&&typeof DeviceMotionEvent!=='undefined'){
+window.addEventListener('devicemotion',onMotion,true);
+}
 if(!isSecureOrigin){
 connInfo.textContent="Waiting for motion sensor samples. Android Chrome may block motion sensors on HTTP pages; if samples stay at 0, use an HTTPS tunnel or trusted certificate.";
 }else if(typeof DeviceMotionEvent==="undefined"){

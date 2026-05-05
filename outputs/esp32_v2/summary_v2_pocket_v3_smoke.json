@@ -1,0 +1,59 @@
+{
+  "accuracy": 0.45904089118326313,
+  "macro_f1": 0.46892260710006506,
+  "min_f1": 0.042666666666666665,
+  "per_class_f1": {
+    "Walking": 0.3236775818639798,
+    "Sitting": 0.36519748139668,
+    "Standing": 0.042666666666666665,
+    "Lying Down": 0.8229842446709916,
+    "Stairs Up": 0.390625,
+    "Stairs Down": 0.5259138025095472,
+    "Jogging": 0.7603833865814696,
+    "Jumping": 0.15376344086021507,
+    "Cycling": 0.8201948627103631,
+    "Running": 0.7004694835680751,
+    "Waist Bending": 0.25227272727272726
+  },
+  "parameter_count": 75290,
+  "fp32_size_kb": 294.1015625,
+  "history": [
+    {
+      "stage": "head",
+      "epoch": 1,
+      "acc": 0.45904089118326313,
+      "macro_f1": 0.46892260710006506,
+      "min_f1": 0.042666666666666665,
+      "loss": 0.4416247873470701
+    },
+    {
+      "stage": "fine_tune",
+      "epoch": 1,
+      "train_loss": 0.5343534375014513,
+      "acc": 0.3134085042793099,
+      "macro_f1": 0.2500064526230675,
+      "min_f1": 0.0,
+      "loss": 1.8223234045094456
+    },
+    {
+      "stage": "fine_tune",
+      "epoch": 2,
+      "train_loss": 0.349224096601424,
+      "acc": 0.2507811438663225,
+      "macro_f1": 0.24342492962836634,
+      "min_f1": 0.0,
+      "loss": 1.6194809880749932
+    }
+  ],
+  "config": {
+    "msm_epochs": 1,
+    "head_epochs": 1,
+    "ft_epochs": 2,
+    "batch_size": 128,
+    "include_mhealth": true,
+    "include_realworld": true,
+    "artifact_suffix": "pocket_v3_smoke",
+    "prototype_weight": 0.01,
+    "prototype_warmup": 5
+  }
+}

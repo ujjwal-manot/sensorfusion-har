@@ -3,7 +3,7 @@ import json
 import socket
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 
 import numpy as np
@@ -15,19 +15,17 @@ from fastapi.staticfiles import StaticFiles
 
 ACTIVITY_LABELS = {
     0: "Walking",
-    1: "Sitting",
-    2: "Standing",
-    3: "Lying Down",
-    4: "Stairs Up",
-    5: "Stairs Down",
-    6: "Jogging",
-    7: "Jumping",
-    8: "Cycling",
-    9: "Running",
-    10: "Waist Bending",
+    1: "Lying Down",
+    2: "Stairs Up",
+    3: "Stairs Down",
+    4: "Jogging",
+    5: "Cycling",
+    6: "Running",
 }
 
 CHANNEL_STATS = None
+CONFIDENCE_THRESHOLD = 0.40
+prediction_history = deque(maxlen=5)
 
 DEFAULT_CHANNEL_STATS = {
     "ax": {"mean": -3.1886, "std": 6.3021},
@@ -44,7 +42,18 @@ STRIDE = 25
 TARGET_HZ = 50
 
 BASE_DIR = Path(__file__).resolve().parent
-CHECKPOINT_PATH = BASE_DIR / "final_esp32_v2_useful11_package" / "checkpoints_v2" / "best_sensorfusion_esp32_v2_useful11_final.pt"
+def _find_checkpoint():
+    candidates = [
+        BASE_DIR / "checkpoints" / "best_model.pt",  # UCI HAR 6-class
+        BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_pocket_final.pt",
+        BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_pocket_v3_7cls.pt",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+CHECKPOINT_PATH = _find_checkpoint()
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -69,23 +78,58 @@ def get_local_ip():
 
 
 def load_model():
-    global model, CHANNEL_STATS
+    global model, CHANNEL_STATS, ACTIVITY_LABELS, WINDOW_SIZE, STRIDE
     if not CHECKPOINT_PATH.exists():
         print(f"[server] No checkpoint at {CHECKPOINT_PATH}, using heuristic classifier")
         CHANNEL_STATS = DEFAULT_CHANNEL_STATS
         return
     try:
         sys.path.insert(0, str(BASE_DIR / "final_esp32_v2_useful11_package"))
-        from train_esp32_v2_expanded_local import SensorFusionESP32
+        sys.path.insert(0, str(BASE_DIR))
         state = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
-        num_classes = state.get("num_classes", 11)
-        model = SensorFusionESP32(input_channels=6, reservoir_size=64, num_classes=num_classes)
-        if "model_state_dict" in state:
-            model.load_state_dict(state["model_state_dict"], strict=False)
-        else:
-            model.load_state_dict(state, strict=False)
+        ckpt_labels = state.get("labels", state.get("activity_labels", None))
+        num_classes = len(ckpt_labels) if ckpt_labels else state.get("num_classes", 6)
+        if ckpt_labels:
+            ACTIVITY_LABELS = {i: lbl for i, lbl in enumerate(ckpt_labels)}
+
+        # Try SensorFusionHAR (UCI HAR) first, then SensorFusionESP32 fallback
+        model = None
+        last_err = None
+        loaded_class = None
+        for ModelClass, mod_path in [
+            ("SensorFusionHAR", "model.sensorfusion"),
+            ("SensorFusionESP32", "train_esp32_v2_expanded_local"),
+        ]:
+            try:
+                mod = __import__(mod_path, fromlist=[ModelClass])
+                Cls = getattr(mod, ModelClass)
+                if ModelClass == "SensorFusionHAR":
+                    candidate = Cls(num_classes=num_classes)
+                else:
+                    candidate = Cls(input_channels=6, reservoir_size=64, num_classes=num_classes)
+                if "model_state_dict" in state:
+                    candidate.load_state_dict(state["model_state_dict"], strict=False)
+                else:
+                    candidate.load_state_dict(state, strict=False)
+                model = candidate
+                loaded_class = ModelClass
+                print(f"[server] Loaded architecture: {ModelClass}")
+                break
+            except Exception as e:
+                last_err = e
+        if model is None:
+            raise last_err
         model.to(device)
         model.eval()
+
+        # Set window size based on architecture
+        if loaded_class == "SensorFusionHAR":
+            WINDOW_SIZE = 128
+            STRIDE = 64
+        else:
+            WINDOW_SIZE = 50
+            STRIDE = 25
+        print(f"[server] Window size set to {WINDOW_SIZE}, stride {STRIDE}")
 
         norm_stats = state.get("normalization", state.get("normalization_stats", None))
         stats_file = CHECKPOINT_PATH.parent.parent / "exports" / "esp32_v2" / "normalization_stats.json"
@@ -105,12 +149,7 @@ def load_model():
             CHANNEL_STATS = DEFAULT_CHANNEL_STATS
             print("[server] Using default normalization stats")
 
-        if "activity_labels" in state:
-            global ACTIVITY_LABELS
-            labels = state["activity_labels"]
-            ACTIVITY_LABELS = {i: labels[i] for i in range(len(labels))}
-
-        print(f"[server] Model loaded ({num_classes} classes)")
+        print(f"[server] Model loaded ({num_classes} classes) from {CHECKPOINT_PATH.name}")
     except Exception as e:
         model = None
         CHANNEL_STATS = DEFAULT_CHANNEL_STATS
@@ -227,6 +266,16 @@ def run_inference(data):
         label, conf, probs = heuristic_classify(normed)
 
     elapsed = (time.perf_counter() - t0) * 1000
+
+    if conf < CONFIDENCE_THRESHOLD:
+        label = "Uncertain"
+
+    prediction_history.append(label)
+    if len(prediction_history) >= 3:
+        vote_counts = Counter(prediction_history)
+        majority_label = vote_counts.most_common(1)[0][0]
+        if majority_label != "Uncertain" or all(p == "Uncertain" for p in prediction_history):
+            label = majority_label
 
     result = {
         "prediction": label,
@@ -363,7 +412,11 @@ async def dashboard_ws(websocket: WebSocket):
     dashboard_clients.add(websocket)
     print(f"[server] Dashboard connected ({len(dashboard_clients)} active)")
     try:
+        labels_ordered = [ACTIVITY_LABELS[i] for i in sorted(ACTIVITY_LABELS.keys())]
         await websocket.send_text(json.dumps({
+            "activity_labels": labels_ordered,
+            "num_classes": len(labels_ordered),
+            "checkpoint": CHECKPOINT_PATH.name,
             "phone_connected": len(phone_clients),
             "status": "Ready" if phone_clients else "Waiting for phone",
             "buffer_size": len(sensor_buffer),
@@ -388,8 +441,10 @@ async def dashboard_ws(websocket: WebSocket):
 async def startup():
     load_model()
     ip = get_local_ip()
+    labels_short = "/".join([ACTIVITY_LABELS[i] for i in sorted(ACTIVITY_LABELS.keys())])
     print(f"\n{'=' * 60}")
-    print(f"  HAR Server (V2 - 11 classes)")
+    print(f"  HAR Server ({len(ACTIVITY_LABELS)} classes: {labels_short})")
+    print(f"  Checkpoint: {CHECKPOINT_PATH.name}")
     print(f"  Dashboard:  https://{ip}:8443/")
     print(f"  Phone:      https://{ip}:8443/phone")
     print(f"  HTTP:       http://{ip}:8765/  (redirects to HTTPS)")

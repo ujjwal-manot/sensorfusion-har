@@ -56,14 +56,14 @@ warnings.filterwarnings("ignore")
 SEED = 42
 TARGET_TIME_STEPS = 50
 INPUT_CHANNELS = 6
-NUM_CLASSES = 11
+NUM_CLASSES = 7
 ENTROPY_WEIGHT = 0.01
 MIXUP_ALPHA = 0.2
 MIXUP_PROB = 0.30
 
 ESP32_ACTIVITY_LABELS = [
-    "Walking", "Sitting", "Standing", "Lying Down", "Stairs Up", "Stairs Down",
-    "Jogging", "Jumping", "Cycling", "Running", "Waist Bending",
+    "Walking", "Lying Down", "Stairs Up", "Stairs Down",
+    "Jogging", "Cycling", "Running",
 ]
 
 CHECKPOINT_DIR = "checkpoints_v2"
@@ -86,47 +86,38 @@ MHEALTH_URLS = [
 ]
 
 MHEALTH_TO_MERGED = {
-    1: 2,
-    2: 1,
-    3: 3,
+    3: 1,
     4: 0,
-    6: 10,
-    9: 8,
-    10: 6,
-    11: 9,
-    12: 7,
+    5: 2,
+    9: 5,
+    10: 4,
+    11: 6,
 }
 
 MHEALTH_SENSOR_COLS = [14, 15, 16, 17, 18, 19]
 
 REALWORLD_TO_MERGED = {
     "walking": 0,
-    "sitting": 1,
-    "standing": 2,
-    "lying": 3,
-    "climbingup": 4,
-    "climbingdown": 5,
-    "running": 9,
-    "jumping": 7,
+    "lying": 1,
+    "climbingup": 2,
+    "climbingdown": 3,
+    "running": 6,
 }
 
-# UCIHAR raw labels: 0:Walking, 1:Walking_Up, 2:Walking_Down, 3:Sitting, 4:Standing, 5:Laying
-UCIHAR_TO_MERGED = {0: 0, 1: 4, 2: 5, 3: 1, 4: 2, 5: 3}
+# UCIHAR raw labels: 0:Walking, 1:Walking_Up, 2:Walking_Down, 3:Sitting(skip), 4:Standing(skip), 5:Laying
+UCIHAR_TO_MERGED = {0: 0, 1: 2, 2: 3, 5: 1}
 
 # PAMAP2 internal IDs (after dataset class re-indexes raw activity codes)
-#  0 Lying, 1 Sitting, 2 Standing, 3 Walking, 4 Running, 5 Cycling,
+#  0 Lying, 1 Sitting(skip), 2 Standing(skip), 3 Walking, 4 Running, 5 Cycling,
 #  6 Nordic Walking (skip), 7 Ascending Stairs, 8 Descending Stairs,
-#  9 Vacuum Cleaning, 10 Ironing, 11 Rope Jumping
+#  9 Vacuum Cleaning(skip), 10 Ironing(skip), 11 Rope Jumping(skip)
 PAMAP2_TO_MERGED = {
-    0: 3,
-    1: 1,
-    2: 2,
+    0: 1,
     3: 0,
-    4: 9,
-    5: 8,
-    7: 4,
-    8: 5,
-    11: 7,
+    4: 6,
+    5: 5,
+    7: 2,
+    8: 3,
 }
 
 
@@ -153,6 +144,9 @@ class HARWindowDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
+UCI_G_TO_MS2 = 9.81
+
+
 class UCITotalHARDataset(Dataset):
     def __init__(self, root_dir: str, split: str = "train") -> None:
         assert split in ("train", "test")
@@ -160,7 +154,9 @@ class UCITotalHARDataset(Dataset):
         for template in UCI_TOTAL_SIGNAL_FILES:
             path = os.path.join(root_dir, split, "Inertial Signals", template.format(split))
             signals.append(np.loadtxt(path))
-        self.X = torch.tensor(np.stack(signals, axis=-1), dtype=torch.float32)
+        raw = np.stack(signals, axis=-1).astype(np.float32)
+        raw[:, :, :3] *= UCI_G_TO_MS2
+        self.X = torch.tensor(raw, dtype=torch.float32)
         labels = np.loadtxt(os.path.join(root_dir, split, f"y_{split}.txt"), dtype=int)
         self.y = torch.tensor(labels - 1, dtype=torch.long)
 
@@ -549,17 +545,19 @@ class EchoStateNetworkEdge(nn.Module):
 
 
 class DSConvEncoderEdge(nn.Module):
-    def __init__(self, in_channels=64, out_channels=64):
+    def __init__(self, in_channels=64, out_channels=64, dropout=0.15):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv1d(in_channels, in_channels, 5, padding=2, groups=in_channels, bias=False),
             nn.Conv1d(in_channels, out_channels, 1, bias=False),
             nn.BatchNorm1d(out_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout1d(dropout),
             nn.Conv1d(out_channels, out_channels, 5, stride=2, padding=2, groups=out_channels, bias=False),
             nn.Conv1d(out_channels, out_channels, 1, bias=False),
             nn.BatchNorm1d(out_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout1d(dropout),
         )
 
     def forward(self, x):
@@ -599,7 +597,7 @@ class EdgeSpectralGatedFusion(nn.Module):
 
 
 class PatchMicroAttentionEdge(nn.Module):
-    def __init__(self, in_channels=64, seq_len=25, patch_len=5, d_model=64):
+    def __init__(self, in_channels=64, seq_len=25, patch_len=5, d_model=64, attn_drop=0.10):
         super().__init__()
         self.patch_len = patch_len
         self.num_patches = seq_len // patch_len
@@ -609,6 +607,7 @@ class PatchMicroAttentionEdge(nn.Module):
         self.v = nn.Linear(d_model, d_model)
         self.out = nn.Linear(d_model, d_model)
         self.norm = nn.LayerNorm(d_model)
+        self.attn_drop = nn.Dropout(attn_drop)
         self.scale = d_model ** -0.5
 
     def forward(self, x, return_attention=False):
@@ -621,6 +620,7 @@ class PatchMicroAttentionEdge(nn.Module):
         q, k, v = self.q(z), self.k(z), self.v(z)
         scores = (q @ k.transpose(-2, -1)) * self.scale
         attn = torch.softmax(scores, dim=-1)
+        attn = self.attn_drop(attn)
         z = self.norm(self.out(attn @ v) + z)
         pooled = z.mean(dim=1)
         entropy = -(attn * torch.log(attn.clamp_min(1e-8))).sum(dim=-1).mean()
@@ -666,8 +666,10 @@ class SensorFusionESP32(nn.Module):
         self.feature_fusion = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(inplace=True),
+            nn.Dropout(0.25),
             nn.LayerNorm(64),
         )
+        self.pre_cls_drop = nn.Dropout(0.25)
         self.classifier_bn = nn.BatchNorm1d(64)
         self.classifier = ScaledBinaryLinear(64, num_classes)
 
@@ -695,7 +697,7 @@ class SensorFusionESP32(nn.Module):
         feats = self.attention(fused)
         if x is not None:
             feats = self.feature_fusion(torch.cat([feats, self.orientation(x)], dim=1))
-        return feats
+        return self.pre_cls_drop(feats)
 
     def forward(self, x, return_aux=False):
         h = self.reservoir(x)
@@ -705,6 +707,16 @@ class SensorFusionESP32(nn.Module):
             return out, aux
         feats = self._features(h, x=x)
         return self.classifier(self.classifier_bn(feats))
+
+    def forward_eval(self, x):
+        """Inference without dropout — sets eval mode internally."""
+        was_training = self.training
+        self.eval()
+        with torch.no_grad():
+            out = self.forward(x)
+        if was_training:
+            self.train()
+        return out
 
     def reservoir_states(self, x):
         return self.reservoir(x)
@@ -795,6 +807,17 @@ class PrototypeMarginLoss(nn.Module):
         return own.mean() + F.relu(self.margin + own - nearest_other).mean()
 
 
+def _random_rotation_matrix():
+    angles = [random.uniform(0, 2 * math.pi) for _ in range(3)]
+    ca, sa = math.cos(angles[0]), math.sin(angles[0])
+    cb, sb = math.cos(angles[1]), math.sin(angles[1])
+    cg, sg = math.cos(angles[2]), math.sin(angles[2])
+    Rx = torch.tensor([[1, 0, 0], [0, ca, -sa], [0, sa, ca]], dtype=torch.float32)
+    Ry = torch.tensor([[cb, 0, sb], [0, 1, 0], [-sb, 0, cb]], dtype=torch.float32)
+    Rz = torch.tensor([[cg, -sg, 0], [sg, cg, 0], [0, 0, 1]], dtype=torch.float32)
+    return Rz @ Ry @ Rx
+
+
 def augment_batch(x):
     if not isinstance(x, torch.Tensor):
         x = torch.tensor(x, dtype=torch.float32)
@@ -804,6 +827,10 @@ def augment_batch(x):
     if random.random() < 0.20:
         ch = torch.randint(0, x.size(2), (1,), device=x.device).item()
         x_aug[:, :, ch] = 0.0
+    if random.random() < 0.30:
+        R = _random_rotation_matrix().to(x_aug.device)
+        x_aug[:, :, :3] = x_aug[:, :, :3] @ R.T
+        x_aug[:, :, 3:] = x_aug[:, :, 3:] @ R.T
     return x_aug
 
 
@@ -880,9 +907,13 @@ def evaluate_model(model, loader, device, criterion=None):
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--msm-epochs", type=int, default=8)
-    ap.add_argument("--head-epochs", type=int, default=4)
-    ap.add_argument("--ft-epochs", type=int, default=20)
+    ap.add_argument("--msm-epochs", type=int, default=10)
+    ap.add_argument("--head-epochs", type=int, default=50)
+    ap.add_argument("--ft-epochs", type=int, default=0)
+    ap.add_argument("--patience", type=int, default=10,
+                    help="Early-stopping patience for head training.")
+    ap.add_argument("--swa-start", type=int, default=30,
+                    help="Epoch from which SWA averaging begins (head phase).")
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--reservoir-size", type=int, default=64)
     ap.add_argument("--focal-gamma", type=float, default=1.5)
@@ -891,7 +922,7 @@ def main():
     ap.add_argument("--prototype-warmup", type=int, default=5)
     ap.add_argument("--no-mhealth", action="store_true")
     ap.add_argument("--no-realworld", action="store_true")
-    ap.add_argument("--artifact-suffix", type=str, default="useful11_rw")
+    ap.add_argument("--artifact-suffix", type=str, default="pocket_final")
     ap.add_argument("--dataset-only", action="store_true")
     ap.add_argument("--smoke", action="store_true",
                     help="Tiny budget to verify the pipeline.")
@@ -905,9 +936,11 @@ def main():
     model_tag = f"sensorfusion_esp32_v2_{artifact_suffix}"
 
     if args.smoke:
-        args.msm_epochs = 1
-        args.head_epochs = 1
-        args.ft_epochs = 2
+        args.msm_epochs = 2
+        args.head_epochs = 4
+        args.ft_epochs = 0
+        args.patience = 99
+        args.swa_start = 99
 
     set_seed(SEED)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -983,18 +1016,24 @@ def main():
     print(f"\nSupervised model parameters: {model.count_parameters():,}")
     print(f"FP32 size: {model.model_size_kb():.1f} KB")
 
-    # ---------- Stage 1: head-only ----------
+    # ---------- Stage 1: head training with early stopping + SWA ----------
     print("\n[Stage 1: head training]")
     for name, p in model.named_parameters():
         p.requires_grad = not (name.startswith("reservoir") or name.startswith("dsconv"))
     head_opt = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad], lr=1e-3, weight_decay=1e-4
     )
-    head_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-        head_opt, T_max=max(args.head_epochs, 1)
+    head_sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        head_opt, T_0=15, T_mult=1, eta_min=1e-5
     )
+    swa_model = torch.optim.swa_utils.AveragedModel(model)
+    swa_sched = torch.optim.swa_utils.SWALR(head_opt, swa_lr=2e-4, anneal_epochs=5)
+    swa_started = False
+
     history = []
     best_score, best_metrics = -1.0, None
+    patience_counter = 0
+
     for epoch in range(1, args.head_epochs + 1):
         model.train()
         for xb, yb in train_loader:
@@ -1007,7 +1046,14 @@ def main():
                 [p for p in model.parameters() if p.requires_grad], 1.0
             )
             head_opt.step()
-        head_sched.step()
+
+        if epoch >= args.swa_start:
+            swa_model.update_parameters(model)
+            swa_sched.step()
+            swa_started = True
+        else:
+            head_sched.step()
+
         m = evaluate_model(model, test_loader, device, criterion)
         score = m["min_f1"] * 4.0 + m["macro_f1"] + m["acc"]
         history.append({
@@ -1021,6 +1067,7 @@ def main():
         if score > best_score:
             best_score = score
             best_metrics = copy.deepcopy(m)
+            patience_counter = 0
             torch.save({
                 "model_state_dict": model.state_dict(),
                 "prototype_state_dict": prototype_loss.state_dict(),
@@ -1030,83 +1077,32 @@ def main():
                 "stage": "head",
                 "epoch": epoch,
             }, os.path.join(CHECKPOINT_DIR, f"best_{model_tag}.pt"))
-        print(f"  Head {epoch:02d}/{args.head_epochs} acc={m['acc']:.4f} macroF1={m['macro_f1']:.4f} minF1={m['min_f1']:.4f}")
+        else:
+            patience_counter += 1
+        print(f"  Head {epoch:02d}/{args.head_epochs} acc={m['acc']:.4f} macroF1={m['macro_f1']:.4f} minF1={m['min_f1']:.4f} patience={patience_counter}/{args.patience}")
+        if patience_counter >= args.patience:
+            print(f"  [Early stopping] No improvement for {args.patience} epochs.")
+            break
 
-    # ---------- Stage 2: full fine-tuning ----------
-    print("\n[Stage 2: full fine-tune]")
-    for p in model.parameters():
-        p.requires_grad = True
-    optimizer = torch.optim.AdamW([
-        {"params": model.reservoir.parameters(), "lr": 2e-4},
-        {"params": model.dsconv.parameters(), "lr": 5e-4},
-        {"params": model.multiscale.parameters(), "lr": 5e-4},
-        {"params": model.gate.parameters(), "lr": 7e-4},
-        {"params": model.attention.parameters(), "lr": 7e-4},
-        {"params": model.orientation.parameters(), "lr": 7e-4},
-        {"params": model.feature_fusion.parameters(), "lr": 7e-4},
-        {"params": prototype_loss.parameters(), "lr": 7e-4},
-        {"params": list(model.classifier_bn.parameters())
-                   + list(model.classifier.parameters())
-                   + [model.diff_gate], "lr": 1e-3},
-    ], weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=max(args.ft_epochs, 1)
-    )
-
-    t0 = time.time()
-    for epoch in range(1, args.ft_epochs + 1):
-        model.train()
-        train_loss, batches = 0.0, 0
-        for xb, yb in train_loader:
-            xb, yb = xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            logits, aux = model(xb, return_aux=True)
-            loss = (
-                criterion(logits, yb)
-                + (
-                    args.prototype_weight
-                    * min(1.0, epoch / max(args.prototype_warmup, 1))
-                    * prototype_loss(aux["features"], yb)
-                )
-                - ENTROPY_WEIGHT * aux["attention_entropy"]
-            )
-            if random.random() < MIXUP_PROB:
-                idx = torch.randperm(xb.size(0), device=device)
-                loss = loss + 0.35 * reservoir_manifold_mixup_edge(
-                    model, xb, xb[idx], yb, yb[idx], criterion, alpha=MIXUP_ALPHA
-                )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            train_loss += float(loss.item())
-            batches += 1
-        scheduler.step()
-
-        m = evaluate_model(model, test_loader, device, criterion)
-        score = m["min_f1"] * 4.0 + m["macro_f1"] + m["acc"]
-        history.append({
-            "stage": "fine_tune",
-            "epoch": epoch,
-            "train_loss": train_loss / max(batches, 1),
-            "acc": m["acc"], "macro_f1": m["macro_f1"], "min_f1": m["min_f1"],
-            "loss": m["loss"],
-        })
-        if score > best_score:
-            best_score = score
-            best_metrics = copy.deepcopy(m)
+    if swa_started:
+        print("\n[SWA: updating BatchNorm statistics]")
+        torch.optim.swa_utils.update_bn(train_loader, swa_model, device=device)
+        swa_m = evaluate_model(swa_model, test_loader, device, criterion)
+        swa_score = swa_m["min_f1"] * 4.0 + swa_m["macro_f1"] + swa_m["acc"]
+        print(f"  SWA: acc={swa_m['acc']:.4f} macroF1={swa_m['macro_f1']:.4f} minF1={swa_m['min_f1']:.4f}")
+        if swa_score > best_score:
+            best_score = swa_score
+            best_metrics = copy.deepcopy(swa_m)
             torch.save({
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": swa_model.module.state_dict(),
                 "prototype_state_dict": prototype_loss.state_dict(),
-                "metrics": {"acc": m["acc"], "macro_f1": m["macro_f1"], "min_f1": m["min_f1"]},
+                "metrics": {"acc": swa_m["acc"], "macro_f1": swa_m["macro_f1"], "min_f1": swa_m["min_f1"]},
                 "labels": ESP32_ACTIVITY_LABELS,
                 "normalization": norm_stats,
-                "stage": "fine_tune",
+                "stage": "swa",
                 "epoch": epoch,
             }, os.path.join(CHECKPOINT_DIR, f"best_{model_tag}.pt"))
-        print(f"  FT {epoch:03d}/{args.ft_epochs} loss={train_loss/max(batches,1):.4f} "
-              f"acc={m['acc']:.4f} macro={m['macro_f1']:.4f} minF1={m['min_f1']:.4f} "
-              f"bestMin={best_metrics['min_f1']:.4f}")
-    print(f"  Fine-tuning: {(time.time() - t0)/60:.1f} min")
+            print("  SWA checkpoint is the new best!")
 
     # ---------- Final eval ----------
     print("\n[Final evaluation]")
@@ -1174,17 +1170,21 @@ def main():
 
     # ---------- ONNX export ----------
     print("\n[ONNX export]")
-    import onnx
-    model_cpu = model.cpu().eval()
-    onnx_path = os.path.join(EXPORT_DIR, f"{model_tag}.onnx")
-    dummy = torch.randn(1, TARGET_TIME_STEPS, INPUT_CHANNELS, dtype=torch.float32)
-    torch.onnx.export(
-        model_cpu, dummy, onnx_path, opset_version=17,
-        input_names=["input"], output_names=["logits"], dynamic_axes=None,
-    )
-    onnx_model = onnx.load(onnx_path)
-    onnx.checker.check_model(onnx_model)
-    print(f"ONNX OK: {onnx_path} ({os.path.getsize(onnx_path)/1024:.1f} KB)")
+    try:
+        import onnx
+        model_cpu = model.cpu().eval()
+        onnx_path = os.path.join(EXPORT_DIR, f"{model_tag}.onnx")
+        dummy = torch.randn(1, TARGET_TIME_STEPS, INPUT_CHANNELS, dtype=torch.float32)
+        torch.onnx.export(
+            model_cpu, dummy, onnx_path, opset_version=18,
+            input_names=["input"], output_names=["logits"], dynamic_axes=None,
+        )
+        onnx_model = onnx.load(onnx_path)
+        onnx.checker.check_model(onnx_model)
+        print(f"ONNX OK: {onnx_path} ({os.path.getsize(onnx_path)/1024:.1f} KB)", flush=True)
+    except Exception as onnx_err:
+        print(f"[ONNX export skipped] {onnx_err}")
+        model_cpu = model.cpu().eval()
 
     # ---------- Calibration data for Colab TFLite step ----------
     n_calib = min(256, len(train_ds))

@@ -1,0 +1,55 @@
+{
+  "accuracy": 0.6663942798774259,
+  "macro_f1": 0.6447206605019199,
+  "min_f1": 0.3905325443786982,
+  "per_class_f1": {
+    "Walking": 0.3905325443786982,
+    "Lying Down": 0.9136163982430454,
+    "Stairs Up": 0.5669824086603519,
+    "Stairs Down": 0.6428571428571429,
+    "Jogging": 0.605,
+    "Cycling": 0.8093385214007782,
+    "Running": 0.584717607973422
+  },
+  "parameter_count": 75025,
+  "fp32_size_kb": 293.06640625,
+  "history": [
+    {
+      "stage": "head",
+      "epoch": 1,
+      "acc": 0.6663942798774259,
+      "macro_f1": 0.6447206605019199,
+      "min_f1": 0.3905325443786982,
+      "loss": 0.1764552742242813
+    },
+    {
+      "stage": "fine_tune",
+      "epoch": 1,
+      "train_loss": 0.6288178831731018,
+      "acc": 0.3417773237997957,
+      "macro_f1": 0.23604279695309088,
+      "min_f1": 0.0,
+      "loss": 3.281646955013275
+    },
+    {
+      "stage": "fine_tune",
+      "epoch": 2,
+      "train_loss": 0.31676400207767363,
+      "acc": 0.3871297242083759,
+      "macro_f1": 0.32686002709216117,
+      "min_f1": 0.0,
+      "loss": 1.8355483770370484
+    }
+  ],
+  "config": {
+    "msm_epochs": 1,
+    "head_epochs": 1,
+    "ft_epochs": 2,
+    "batch_size": 128,
+    "include_mhealth": true,
+    "include_realworld": true,
+    "artifact_suffix": "pocket_smoke7",
+    "prototype_weight": 0.01,
+    "prototype_warmup": 5
+  }
+}

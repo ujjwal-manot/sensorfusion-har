@@ -29,9 +29,9 @@ ACTIVITY_NAMES = [
     "Descending Stairs", "Vacuum Cleaning", "Ironing", "Rope Jumping",
 ]
 
-HAND_ACC_COLS = [4, 5, 6]
-HAND_GYRO_COLS = [10, 11, 12]
-SENSOR_COLS = HAND_ACC_COLS + HAND_GYRO_COLS
+CHEST_ACC_COLS = [21, 22, 23]
+CHEST_GYRO_COLS = [27, 28, 29]
+SENSOR_COLS = CHEST_ACC_COLS + CHEST_GYRO_COLS
 
 TRAIN_SUBJECTS = [1, 2, 3, 4, 5, 6]
 TEST_SUBJECTS = [7, 8, 9]
