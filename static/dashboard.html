@@ -125,8 +125,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 </div>
 <script>
 (function(){
-var ACTIVITIES=["Walking","Sitting","Standing","Lying Down","Stairs Up","Stairs Down","Jogging","Jumping","Cycling","Running","Waist Bending"];
-var COLORS={"Walking":"#4CAF50","Sitting":"#9C27B0","Standing":"#F44336","Lying Down":"#00BCD4","Stairs Up":"#FF9800","Stairs Down":"#2196F3","Jogging":"#8BC34A","Jumping":"#FFEB3B","Cycling":"#795548","Running":"#E91E63","Waist Bending":"#607D8B"};
+var ACTIVITIES=["WALKING","WALKING_UP","WALKING_DOWN","SITTING","STANDING","LAYING"];
+var COLORS={"WALKING":"#4CAF50","WALKING_UP":"#FF9800","WALKING_DOWN":"#2196F3","SITTING":"#9C27B0","STANDING":"#F44336","LAYING":"#00BCD4","Walking":"#4CAF50","Walking Upstairs":"#FF9800","Walking Downstairs":"#2196F3","Sitting":"#9C27B0","Standing":"#F44336","Laying":"#00BCD4"};
+var FALLBACK_COLORS=["#4CAF50","#FF9800","#2196F3","#9C27B0","#F44336","#00BCD4","#8BC34A","#FFEB3B","#795548","#E91E63","#607D8B"];
+function colorFor(name,idx){return COLORS[name]||FALLBACK_COLORS[idx%FALLBACK_COLORS.length];}
 var WINDOW=200;
 var TIMELINE_MAX=30;
 
@@ -165,6 +167,7 @@ var accelCtx=accelCanvas.getContext("2d");
 var gyroCtx=gyroCanvas.getContext("2d");
 
 function initProbList(){
+probList.innerHTML="";
 for(var i=0;i<ACTIVITIES.length;i++){
 var row=document.createElement("div");
 row.className="prob-row";
@@ -176,7 +179,7 @@ barBg.className="prob-bar-bg";
 var barFill=document.createElement("div");
 barFill.className="prob-bar-fill";
 barFill.id="probFill_"+i;
-barFill.style.background=COLORS[ACTIVITIES[i]];
+barFill.style.background=colorFor(ACTIVITIES[i],i);
 barBg.appendChild(barFill);
 var pct=document.createElement("div");
 pct.className="prob-pct mono";
@@ -321,10 +324,12 @@ function updateActivity(name,confidence){
 currentActivity=name||"--";
 currentConfidence=confidence||0;
 activityName.textContent=currentActivity;
-activityName.style.color=COLORS[currentActivity]||"#7c8aff";
+var idx=ACTIVITIES.indexOf(currentActivity);
+var activityColor=idx>=0?colorFor(currentActivity,idx):(COLORS[currentActivity]||"#7c8aff");
+activityName.style.color=activityColor;
 var pct=Math.round(currentConfidence*100);
 confBar.style.width=pct+"%";
-confBar.style.background=COLORS[currentActivity]||"#7c8aff";
+confBar.style.background=activityColor;
 confText.textContent=pct+"%";
 }
 
@@ -346,7 +351,8 @@ for(var i=0;i<TIMELINE_MAX;i++){
 var block=document.getElementById("tlBlock_"+i);
 if(!block)continue;
 if(i<timeline.length){
-block.style.background=COLORS[timeline[i]]||"#1a1a2e";
+var tIdx=ACTIVITIES.indexOf(timeline[i]);
+block.style.background=tIdx>=0?colorFor(timeline[i],tIdx):(COLORS[timeline[i]]||"#1a1a2e");
 block.title=timeline[i];
 }else{
 block.style.background="#1a1a2e";
@@ -378,6 +384,15 @@ try{ws.close();}catch(e){}
 ws.onmessage=function(evt){
 try{
 var msg=JSON.parse(evt.data);
+if(msg.activity_labels&&Array.isArray(msg.activity_labels)&&msg.activity_labels.length>0){
+var same=msg.activity_labels.length===ACTIVITIES.length&&msg.activity_labels.every(function(l,i){return l===ACTIVITIES[i];});
+if(!same){
+ACTIVITIES=msg.activity_labels.slice();
+initProbList();
+timeline=[];
+initTimeline();
+}
+}
 if(msg.sensor){
 var s=msg.sensor;
 pushData(accelData.x,s.ax||0);
