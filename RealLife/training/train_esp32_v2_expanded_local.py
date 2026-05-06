@@ -31,7 +31,19 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
 )
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+# FIX: walk upward looking for the `model/` package. The real-life repo has
+# the script at <root>/training/ and `model/` at <root>/model/. The HIL repo
+# expects the user to place HIL_Implementation/ next to model/ in their parent
+# project, so model/ can be one extra level up. Try both.
+for _parent in (
+    os.path.dirname(_HERE),                    # repo-root layout
+    os.path.dirname(os.path.dirname(_HERE)),   # HIL-as-subfolder layout
+):
+    if os.path.isdir(os.path.join(_parent, "model")):
+        sys.path.insert(0, _parent)
+        break
 from model.dataset import UCIHARDataset
 from model.dataset_pamap2 import PAMAP2Dataset
 
@@ -40,14 +52,31 @@ warnings.filterwarnings("ignore")
 SEED = 42
 TARGET_TIME_STEPS = 50
 INPUT_CHANNELS = 6
-NUM_CLASSES = 7
+
+# FIX: previously NUM_CLASSES = 7 with a 7-entry ESP32_ACTIVITY_LABELS list, which
+# silently mismatched the deployed 11-class system (server.py, esp32 firmware,
+# esp32_v2_useful11_config.h, the dashboards, and the report all expect 11
+# classes). Training the old 7-class layout produces a checkpoint that can NEVER
+# be loaded into the deployed pipeline because the classifier head has the wrong
+# output dimension. The 11-class layout below is the one that matches
+# esp32_v2_useful11_config.h byte-for-byte; do not change the order.
+NUM_CLASSES = 11
 ENTROPY_WEIGHT = 0.01
 MIXUP_ALPHA = 0.2
 MIXUP_PROB = 0.30
 
 ESP32_ACTIVITY_LABELS = [
-    "Walking", "Lying Down", "Stairs Up", "Stairs Down",
-    "Jogging", "Cycling", "Running",
+    "Walking",       # 0
+    "Sitting",       # 1
+    "Standing",      # 2
+    "Lying Down",    # 3
+    "Stairs Up",     # 4
+    "Stairs Down",   # 5
+    "Jogging",       # 6
+    "Jumping",       # 7
+    "Cycling",       # 8
+    "Running",       # 9
+    "Waist Bending", # 10
 ]
 
 CHECKPOINT_DIR = "checkpoints_v2"
@@ -69,43 +98,82 @@ MHEALTH_URLS = [
     "https://archive.ics.uci.edu/ml/machine-learning-databases/00319/MHEALTHDATASET.zip",
 ]
 
+# FIX: MHEALTH source labels are 1-indexed in the .log files (1=Standing,
+# 2=Sitting, 3=Lying, 4=Walking, 5=Climbing stairs, 6=Waist bends, 7=Frontal
+# elevation of arms, 8=Knees bending, 9=Cycling, 10=Jogging, 11=Running, 12=Jump
+# front & back). The dataset loader keeps them 1-indexed (mhealth_windows_from_subject_array
+# uses `labels[start:end]` directly, no -1). The previous mapping targeted a
+# 7-class label space and silently produced nonsense when fed into the 11-class
+# pipeline. Below maps every MHEALTH activity that has an analogue in the
+# deployed 11-class set.
 MHEALTH_TO_MERGED = {
-    3: 1,
-    4: 0,
-    5: 2,
-    9: 5,
-    10: 4,
-    11: 6,
+    1:  2,   # Standing             -> Standing
+    2:  1,   # Sitting              -> Sitting
+    3:  3,   # Lying down           -> Lying Down
+    4:  0,   # Walking              -> Walking
+    5:  4,   # Climbing stairs      -> Stairs Up (no separate down label in MHEALTH)
+    6: 10,   # Waist bends forward  -> Waist Bending
+    9:  8,   # Cycling              -> Cycling
+    10: 6,   # Jogging              -> Jogging
+    11: 9,   # Running              -> Running
+    12: 7,   # Jump front & back    -> Jumping
 }
 
 MHEALTH_SENSOR_COLS = [14, 15, 16, 17, 18, 19]
 
+# FIX: target the 11-class label space, not the old 7-class one. RealWorld HAR
+# folder names: walking, sitting, standing, lying, climbingup, climbingdown,
+# jumping, running. We omit the ones we don't have a clean mapping for.
 REALWORLD_TO_MERGED = {
-    "walking": 0,
-    "lying": 1,
-    "climbingup": 2,
-    "climbingdown": 3,
-    "running": 6,
+    "walking":      0,
+    "sitting":      1,
+    "standing":     2,
+    "lying":        3,
+    "climbingup":   4,
+    "climbingdown": 5,
+    "jumping":      7,
+    "running":      9,
 }
 
+# FIX: UCIHAR labels in y_*.txt are 1..6, but UCITotalHARDataset.__init__ does
+# `labels - 1` so ds.y is in 0..5. The previous mapping had keys {1,2,3,5,6}
+# which does not match either convention coherently — for 0-indexed sources,
+# key 1 means "Walking Upstairs" (not Walking), and key 6 doesn't exist at all.
+# Result: the wrong samples were assigned to the wrong merged classes during
+# every training run. The mapping below uses 0-indexed sources matching what
+# the dataset actually returns, and targets the 11-class label space.
+#   UCIHAR 0-indexed source labels:
+#     0 = Walking, 1 = Walking Upstairs, 2 = Walking Downstairs,
+#     3 = Sitting, 4 = Standing,         5 = Laying.
 UCIHAR_TO_MERGED = {
-    1: 0,
-    2: 4,
-    3: 5,
-    5: 1,
-    6: 2,
+    0: 0,   # Walking            -> Walking
+    1: 4,   # Walking Upstairs   -> Stairs Up
+    2: 5,   # Walking Downstairs -> Stairs Down
+    3: 1,   # Sitting            -> Sitting
+    4: 2,   # Standing           -> Standing
+    5: 3,   # Laying             -> Lying Down
 }
 
+# FIX: PAMAP2 protocol labels are 1-indexed and used directly as raw integers
+# inside the .dat files (no -1 anywhere in mhealth_windows_from_subject_array
+# or PAMAP2Dataset). The previous mapping had duplicate keys (7 and 8) AND was
+# inconsistent with both the 7- and 11-class label spaces. The mapping below
+# is for the 11-class deployed label space.
+#   PAMAP2 1-indexed activity ids (from the README "DataCollectionProtocol.pdf"):
+#     1=lying, 2=sitting, 3=standing, 4=walking, 5=running, 6=cycling,
+#     7=Nordic walking, 12=ascending stairs, 13=descending stairs,
+#     16=vacuum cleaning, 17=ironing, 24=rope jumping
 PAMAP2_TO_MERGED = {
-    1: 1,
-    2: 2,
-    3: 0,
-    4: 6,
-    5: 8,
-    7: 4,
-    8: 5,
-    7: 2,
-    8: 3,
+    1:  3,   # lying               -> Lying Down
+    2:  1,   # sitting             -> Sitting
+    3:  2,   # standing            -> Standing
+    4:  0,   # walking             -> Walking
+    5:  9,   # running             -> Running
+    6:  8,   # cycling             -> Cycling
+    7:  6,   # Nordic walking      -> Jogging (closest match)
+    12: 4,   # ascending stairs    -> Stairs Up
+    13: 5,   # descending stairs   -> Stairs Down
+    24: 7,   # rope jumping        -> Jumping
 }
 
 

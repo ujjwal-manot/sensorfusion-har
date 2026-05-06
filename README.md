@@ -82,8 +82,12 @@ sensorfusion-har/
 │   └── __init__.py
 ├── static/
 │   ├── phone.html             Phone sensor streaming UI
-│   └── dashboard.html         Real-time dashboard
+│   ├── dashboard.html         Legacy real-time dashboard
+│   └── dashboard_v3.html      New 3-section dashboard with model internals
 ├── server.py                  FastAPI WebSocket server
+├── esp32_deploy/
+│   ├── esp32_har.ino          ESP32 firmware for deployment
+│   └── model_data.h           TFLite model header (placeholder)
 ├── train.py                   Training script (UCI-HAR + PAMAP2)
 ├── evaluate.py                Evaluation + ablation + benchmark
 ├── sensorfusion_har.ipynb     66-cell notebook (full analysis)
@@ -128,9 +132,36 @@ python evaluate.py --benchmark --benchmark_runs 1000
 python server.py
 ```
 
-- Dashboard: `http://localhost:8765`
-- Phone: `http://<your-ip>:8765/phone`
-- Both devices must be on the same network.
+- Dashboard (new with model internals): `https://<your-ip>:8443/`
+- Dashboard (legacy): `https://<your-ip>:8443/dashboard-v2`
+- Phone: `https://<your-ip>:8443/phone`
+- Both devices must be on the same network and accept the self-signed certificate warning.
+
+**New Dashboard V3 Features:**
+- Section 1 (Input Details): Sensor waveforms, statistics, normalization status, data quality indicators
+- Section 2 (Model Working): Attention weights heatmap, feature activations, processing pipeline animation, spectral radius
+- Section 3 (Output): Activity prediction, probability distribution, stability metrics
+
+### ESP32 Deployment
+
+See `ESP32_DEPLOYMENT_SUMMARY.md` for detailed ESP32 deployment instructions.
+
+**Quick Start (ESP32):**
+```bash
+# Export model weights (TFLite conversion requires Python 3.10/3.11)
+python export_weights_esp32.py
+
+# Flash ESP32 with esp32_deploy/esp32_har.ino
+# Install TensorFlowLite_ESP32 library in Arduino IDE
+
+# Test with dataset samples
+python esp32_dataset_test.py --port COM3 --dataset uci --samples-per-class 10
+
+# Run Serial-to-WebSocket bridge
+python esp32_bridge.py --port COM3 --ws-url ws://localhost:8443/ws/dashboard
+```
+
+**Note:** TFLite conversion requires TensorFlow (unavailable for Python 3.14). Run `export_tflite.py` on a system with Python 3.10/3.11, or use the weight export approach.
 
 ### Notebook
 
@@ -142,18 +173,25 @@ The 66-cell notebook covers: dataset exploration, augmentation, model architectu
 
 **PAMAP2:** 12 activities (Lying, Sitting, Standing, Walking, Running, Cycling, Nordic Walking, Ascending Stairs, Descending Stairs, Vacuum Cleaning, Ironing, Rope Jumping) from 9 subjects. 128 timesteps x 6 channels at 100Hz.
 
+**MHEALTH:** 21 activities including Stairs Up/Down from 10 subjects. 6 channels at 50Hz.
+
+**RealWorld HAR:** 8 activities from 15 subjects with chest-mounted sensors.
+
+**Current Model (V2):** Trained on merged datasets (UCI-HAR, PAMAP2, MHEALTH, RealWorld) with 11 classes: Walking, Sitting, Standing, Lying Down, Stairs Up, Stairs Down, Jogging, Jumping, Cycling, Running, Waist Bending.
+
 ## Model Specifications
 
 | Metric | Value |
 |---|---|
-| Trainable Parameters | ~23.1K |
-| Model Size (FP32) | ~90 KB |
-| Model Size (INT8) | ~23 KB |
+| Trainable Parameters | ~75K (V2 expanded) |
+| Model Size (FP32) | ~294 KB |
+| Model Size (INT8) | ~75 KB |
 | MACs per Inference | ~766K |
 | Energy per Inference (FP32) | ~0.0035 mJ |
 | Energy per Inference (INT8) | ~0.0002 mJ |
 | Inference Latency | <10 ms (CPU) |
-| Input Shape | (batch, 128, 6) |
+| Input Shape | (batch, 50, 6) - V2 |
+| Output Shape | (batch, 11) - V2 |
 
 ## Ablation Variants
 

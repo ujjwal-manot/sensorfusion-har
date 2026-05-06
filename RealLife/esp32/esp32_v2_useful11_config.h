@@ -1,0 +1,35 @@
+#ifndef SENSORFUSION_ESP32_V2_USEFUL11_CONFIG_H
+#define SENSORFUSION_ESP32_V2_USEFUL11_CONFIG_H
+
+#define SENSORFUSION_V2_TIME_STEPS 50
+#define SENSORFUSION_V2_INPUT_CHANNELS 6
+#define SENSORFUSION_V2_NUM_CLASSES 11
+#define SENSORFUSION_V2_ACCURACY 0.8935640138f
+#define SENSORFUSION_V2_MACRO_F1 0.9027877942f
+#define SENSORFUSION_V2_MIN_F1 0.8342412451f
+
+static const float SENSORFUSION_V2_MEAN[6] = {
+    -3.1886296272f, 1.2004078627f, 2.4552721977f,
+    -0.0335379131f, -0.0226027351f, 0.0529510267f
+};
+
+static const float SENSORFUSION_V2_STD[6] = {
+    6.3020558357f, 6.4955196381f, 3.8114185333f,
+    1.0866706371f, 0.8430932164f, 1.2929021120f
+};
+
+static const char* SENSORFUSION_V2_LABELS[11] = {
+    "Walking",
+    "Sitting",
+    "Standing",
+    "Lying Down",
+    "Stairs Up",
+    "Stairs Down",
+    "Jogging",
+    "Jumping",
+    "Cycling",
+    "Running",
+    "Waist Bending"
+};
+
+#endif

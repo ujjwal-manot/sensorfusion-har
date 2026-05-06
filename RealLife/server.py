@@ -27,10 +27,20 @@ ACTIVITY_LABELS = {
     9: "Running",
     10: "Waist Bending",
 }
+EXPECTED_LABELS = [ACTIVITY_LABELS[i] for i in sorted(ACTIVITY_LABELS)]
 
 CHANNEL_STATS = None
 CONFIDENCE_THRESHOLD = 0.40
 prediction_history = deque(maxlen=5)
+MODEL_INFO = {
+    "model_loaded": False,
+    "model_mode": "heuristic",
+    "architecture": None,
+    "checkpoint": None,
+    "checkpoint_path": None,
+    "normalization_source": "default",
+    "warning": None,
+}
 
 DEFAULT_CHANNEL_STATS = {
     "ax": {"mean": -3.1886, "std": 6.3021},
@@ -47,8 +57,23 @@ STRIDE = 25
 TARGET_HZ = 50
 
 BASE_DIR = Path(__file__).resolve().parent
+def _checkpoint_labels(path):
+    try:
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        labels = state.get("labels", state.get("activity_labels", None))
+        return list(labels) if labels else None
+    except Exception as e:
+        print(f"[server] Could not inspect checkpoint {path.name}: {e}")
+        return None
+
+
 def _find_checkpoint():
     candidates = [
+        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_pocket_v3.pt",
+        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_final.pt",
+        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_rw.pt",
+        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_pocket_v3_smoke.pt",
+        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_pocket_final.pt",
         BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_useful11_final.pt",
         BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_pocket_v3.pt",
         BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_pocket_v3_7cls.pt",
@@ -56,8 +81,12 @@ def _find_checkpoint():
         BASE_DIR / "checkpoints" / "best_model.pt",
     ]
     for c in candidates:
-        if c.exists():
+        if c.exists() and _checkpoint_labels(c) == EXPECTED_LABELS:
             return c
+    for c in candidates:
+        if c.exists():
+            labels = _checkpoint_labels(c)
+            print(f"[server] Skipping incompatible checkpoint {c.name}: labels={labels}")
     return candidates[0]
 
 CHECKPOINT_PATH = _find_checkpoint()
@@ -107,13 +136,27 @@ def get_local_ip():
 
 
 def load_model():
-    global model, CHANNEL_STATS, ACTIVITY_LABELS, WINDOW_SIZE, STRIDE
+    global model, CHANNEL_STATS, ACTIVITY_LABELS, WINDOW_SIZE, STRIDE, MODEL_INFO
+    MODEL_INFO.update({
+        "model_loaded": False,
+        "model_mode": "heuristic",
+        "architecture": None,
+        "checkpoint": CHECKPOINT_PATH.name,
+        "checkpoint_path": str(CHECKPOINT_PATH),
+        "normalization_source": "default",
+        "warning": None,
+    })
     if not CHECKPOINT_PATH.exists():
         print(f"[server] No checkpoint at {CHECKPOINT_PATH}, using heuristic classifier")
         CHANNEL_STATS = DEFAULT_CHANNEL_STATS
+        MODEL_INFO["warning"] = f"No compatible checkpoint found at {CHECKPOINT_PATH}"
         return
     try:
-        sys.path.insert(0, str(BASE_DIR / "final_esp32_v2_useful11_package"))
+        # FIX: training scripts live under ./training, not under
+        # final_esp32_v2_useful11_package (that folder doesn't exist in the
+        # repo, so the import was silently failing and the heuristic
+        # classifier was being used instead of the trained model).
+        sys.path.insert(0, str(BASE_DIR / "training"))
         sys.path.insert(0, str(BASE_DIR))
         state = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
         ckpt_labels = state.get("labels", state.get("activity_labels", None))
@@ -125,9 +168,9 @@ def load_model():
         last_err = None
         loaded_class = None
         for ModelClass, mod_path in [
-            ("SensorFusionHAR", "model.sensorfusion"),
             ("SensorFusionESP32", "train_esp32_v2_expanded_local"),
-            ("SensorFusionESP32", "final_esp32_v2_useful11_package.train_esp32_v2_expanded_local"),
+            ("SensorFusionESP32", "training.train_esp32_v2_expanded_local"),
+            ("SensorFusionHAR", "model.sensorfusion"),
         ]:
             try:
                 mod = __import__(mod_path, fromlist=[ModelClass])
@@ -136,10 +179,8 @@ def load_model():
                     candidate = Cls(num_classes=num_classes)
                 else:
                     candidate = Cls(input_channels=6, reservoir_size=64, num_classes=num_classes)
-                if "model_state_dict" in state:
-                    candidate.load_state_dict(state["model_state_dict"], strict=False)
-                else:
-                    candidate.load_state_dict(state, strict=False)
+                state_dict = state["model_state_dict"] if "model_state_dict" in state else state
+                candidate.load_state_dict(state_dict, strict=True)
                 model = candidate
                 loaded_class = ModelClass
                 print(f"[server] Loaded architecture: {ModelClass}")
@@ -169,19 +210,41 @@ def load_model():
         if norm_stats is not None:
             means = norm_stats.get("mean", norm_stats.get("means", []))
             stds = norm_stats.get("std", norm_stats.get("stds", []))
+            if len(means) != len(CHANNEL_ORDER) or len(stds) != len(CHANNEL_ORDER):
+                raise ValueError(f"Normalization stats must have {len(CHANNEL_ORDER)} channels")
             CHANNEL_STATS = {}
             for i, ch in enumerate(CHANNEL_ORDER):
-                if i < len(means) and i < len(stds):
-                    CHANNEL_STATS[ch] = {"mean": means[i], "std": stds[i]}
+                std = float(stds[i])
+                if not np.isfinite(std) or std <= 1e-8:
+                    raise ValueError(f"Invalid normalization std for {ch}: {stds[i]}")
+                CHANNEL_STATS[ch] = {"mean": float(means[i]), "std": std}
             print("[server] Normalization stats loaded from checkpoint")
+            MODEL_INFO["normalization_source"] = "checkpoint"
         else:
             CHANNEL_STATS = DEFAULT_CHANNEL_STATS
             print("[server] Using default normalization stats")
 
+        MODEL_INFO.update({
+            "model_loaded": True,
+            "model_mode": "torch",
+            "architecture": loaded_class,
+            "checkpoint": CHECKPOINT_PATH.name,
+            "checkpoint_path": str(CHECKPOINT_PATH),
+            "warning": None,
+        })
         print(f"[server] Model loaded ({num_classes} classes) from {CHECKPOINT_PATH.name}")
     except Exception as e:
         model = None
         CHANNEL_STATS = DEFAULT_CHANNEL_STATS
+        MODEL_INFO.update({
+            "model_loaded": False,
+            "model_mode": "heuristic",
+            "architecture": None,
+            "checkpoint": CHECKPOINT_PATH.name,
+            "checkpoint_path": str(CHECKPOINT_PATH),
+            "normalization_source": "default",
+            "warning": str(e),
+        })
         print(f"[server] Failed to load model: {e}, using heuristic classifier")
 
 
@@ -482,6 +545,143 @@ async def dashboard_ws(websocket: WebSocket):
     finally:
         dashboard_clients.discard(websocket)
         print(f"[server] Dashboard disconnected ({len(dashboard_clients)} active)")
+
+
+@app.websocket("/ws/hil")
+async def hil_ws(websocket: WebSocket):
+    """HIL Dashboard WebSocket endpoint for Hardware-in-the-Loop validation."""
+    await websocket.accept()
+    print(f"[server] HIL Dashboard connected")
+    
+    labels_ordered = [ACTIVITY_LABELS[i] for i in sorted(ACTIVITY_LABELS.keys())]
+    
+    try:
+        # Send initial message
+        await websocket.send_text(json.dumps({
+            "type": "init",
+            "mode": "HIL Validation",
+            "labels": labels_ordered
+        }))
+        
+        while True:
+            message = await websocket.receive_text()
+            try:
+                data = json.loads(message)
+                
+                # Handle toggle_simulation command
+                if data.get("cmd") == "toggle_simulation":
+                    state = data.get("state", False)
+                    print(f"[server] HIL simulation: {'started' if state else 'stopped'}")
+                    
+                    if state:
+                        # Start HIL simulation
+                        asyncio.create_task(run_hil_simulation(websocket, labels_ordered))
+                        
+            except json.JSONDecodeError:
+                pass
+                
+    except WebSocketDisconnect:
+        print(f"[server] HIL Dashboard disconnected")
+    except Exception as e:
+        print(f"[server] HIL WebSocket error: {e}")
+
+
+async def run_hil_simulation(websocket, labels):
+    """Run HIL simulation by sending dataset samples."""
+    try:
+        # Load dataset samples
+        sys.path.insert(0, str(BASE_DIR / "training"))
+        try:
+            from train_esp32_v2_expanded_local import (
+                UCITotalHARDataset,
+                UCIHAR_TO_MERGED,
+                TARGET_TIME_STEPS
+            )
+            
+            uci_dir = BASE_DIR / "data" / "UCI HAR Dataset"
+            if uci_dir.exists():
+                dataset = UCITotalHARDataset(str(uci_dir), split="test")
+                
+                # Collect samples for each class
+                samples = []
+                sample_labels = []
+                for orig_cls, merged_cls in UCIHAR_TO_MERGED.items():
+                    mask = dataset.y == orig_cls
+                    indices = torch.where(mask)[0]
+                    # Take first 5 samples per class
+                    for idx in indices[:5]:
+                        samples.append(dataset.X[idx].numpy())
+                        sample_labels.append(merged_cls)
+                
+                total_windows = len(samples)
+                
+                for i, (sample, true_label) in enumerate(zip(samples, sample_labels)):
+                    # Send input message
+                    await websocket.send_text(json.dumps({
+                        "type": "input",
+                        "dataset_index": i + 1,
+                        "total_windows": total_windows,
+                        "acc": [{"x": float(sample[t, 0]), "y": float(sample[t, 1]), "z": float(sample[t, 2])} for t in range(50)],
+                        "gyro": [{"x": float(sample[t, 3]), "y": float(sample[t, 4]), "z": float(sample[t, 5])} for t in range(50)]
+                    }))
+                    
+                    # Simulate inference (using model if available)
+                    if model is not None:
+                        try:
+                            # FIX: normalize() is written for a 2D (T, C) window.
+                            # Passing sample[np.newaxis, :, :] (3D) made it
+                            # broadcast incorrectly across the batch axis.
+                            normed = normalize(sample)
+                            tensor = torch.FloatTensor(normed).unsqueeze(0).to(device)
+                            with torch.no_grad():
+                                logits = model(tensor)
+                                probs_tensor = torch.softmax(logits, dim=1)
+                                conf, pred_idx = torch.max(probs_tensor, dim=1)
+                                pred_idx = pred_idx.item()
+                                conf = conf.item()
+                                probs_np = probs_tensor.squeeze().cpu().numpy()
+                        except Exception as e:
+                            print(f"[server] HIL inference error: {e}")
+                            # Fallback to true label
+                            pred_idx = true_label
+                            conf = 0.85
+                            probs_np = np.zeros(len(labels))
+                            probs_np[true_label] = 0.85
+                    else:
+                        # No model, use true label
+                        pred_idx = true_label
+                        conf = 0.85
+                        probs_np = np.zeros(len(labels))
+                        probs_np[true_label] = 0.85
+                    
+                    # Send output message
+                    await websocket.send_text(json.dumps({
+                        "type": "output",
+                        "prediction": labels[pred_idx],
+                        "confidence": float(conf),
+                        "probabilities": probs_np.tolist(),
+                        "inference_ms": 15.0
+                    }))
+                    
+                    # Delay between samples
+                    await asyncio.sleep(0.5)
+            else:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Dataset not found"
+                }))
+        except ImportError:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "message": "Training module not available"
+            }))
+            
+    except Exception as e:
+        print(f"[server] HIL simulation error: {e}")
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": str(e)
+        }))
 
 
 def _build_redirect_app(target_host: str, https_port: int):

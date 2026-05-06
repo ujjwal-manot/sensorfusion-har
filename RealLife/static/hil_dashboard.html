@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 HIL Validation Dashboard</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Outfit:wght@400;700&display=swap');
+
+        :root {
+            --bg: #0f111a;
+            --panel-bg: rgba(20, 24, 39, 0.6);
+            --border: rgba(255, 255, 255, 0.08);
+            --text-main: #f8f9fa;
+            --text-muted: #8b9bb4;
+            --accent: #00d2ff;
+            --accent-glow: rgba(0, 210, 255, 0.3);
+            --success: #00e676;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(0, 210, 255, 0.05), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(58, 123, 213, 0.05), transparent 25%);
+            color: var(--text-main);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Topbar */
+        .topbar {
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            background: rgba(15, 17, 26, 0.8);
+            backdrop-filter: blur(12px);
+            z-index: 10;
+        }
+
+        .topbar h1 {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            font-size: 1.5rem;
+            letter-spacing: 1px;
+            background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            background: rgba(0, 230, 118, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(0, 230, 118, 0.2);
+            box-shadow: 0 0 10px rgba(0, 230, 118, 0.1);
+        }
+
+        button {
+            background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
+            color: #fff;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px var(--accent-glow);
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 210, 255, 0.4);
+        }
+
+        /* Layout Grid */
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            height: calc(100vh - 70px);
+        }
+
+        /* Glassmorphism Panel */
+        .panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+        }
+
+        .panel-header {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .panel-header i { color: var(--accent); }
+
+        /* SECTION 1: INPUT */
+        .waveform-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .canvas-wrapper {
+            flex: 1;
+            position: relative;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .canvas-label {
+            position: absolute;
+            top: 10px; left: 10px;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        /* SECTION 2: MODEL WORKING */
+        .pipeline {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 30px;
+            flex: 1;
+        }
+        
+        .node {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            padding: 15px 30px;
+            border-radius: 12px;
+            text-align: center;
+            width: 80%;
+            position: relative;
+            transition: all 0.3s;
+        }
+        .node.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--accent-glow);
+            background: rgba(0, 210, 255, 0.05);
+            transform: scale(1.05);
+        }
+        .node h3 { font-size: 1rem; margin-bottom: 5px; color: var(--text-main); }
+        .node p { font-size: 0.75rem; color: var(--text-muted); }
+        
+        .arrow {
+            width: 2px;
+            height: 30px;
+            background: var(--border);
+            position: relative;
+        }
+        .arrow::after {
+            content: '';
+            position: absolute;
+            bottom: -5px; left: -4px;
+            border-width: 5px 5px 0;
+            border-style: solid;
+            border-color: var(--border) transparent transparent transparent;
+        }
+        .arrow.active { background: var(--accent); }
+        .arrow.active::after { border-color: var(--accent) transparent transparent transparent; }
+
+        /* SECTION 3: OUTPUT */
+        .output-main {
+            text-align: center;
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+        .pred-label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 2px; }
+        .pred-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 3rem;
+            font-weight: 800;
+            margin: 10px 0;
+            background: linear-gradient(135deg, #fff, #8b9bb4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            transition: all 0.3s;
+        }
+        .pred-value.highlight { transform: scale(1.1); }
+
+        .conf-list {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+        .conf-list::-webkit-scrollbar { width: 4px; }
+        .conf-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+
+        .conf-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .c-name { width: 100px; font-size: 0.8rem; color: var(--text-muted); text-align: right; }
+        .c-bar-bg {
+            flex: 1;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        .c-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5);
+            width: 0%;
+            border-radius: 4px;
+            transition: width 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .c-pct { width: 40px; font-size: 0.75rem; font-family: monospace; color: var(--accent); }
+
+        .telemetry {
+            margin-top: 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            background: rgba(0,0,0,0.2);
+            padding: 10px 15px;
+            border-radius: 8px;
+        }
+        .t-val { font-family: monospace; color: var(--text-main); font-weight: 600; }
+
+    </style>
+</head>
+<body>
+
+    <div class="topbar">
+        <h1>HAR <span style="font-weight: 300; color: #8b9bb4;">// HIL Validation</span></h1>
+        <div class="controls">
+            <div class="status-badge" id="modeBadge">Connecting...</div>
+            <button id="toggleBtn" onclick="toggleSim()">Start Simulation</button>
+        </div>
+    </div>
+
+    <div class="dashboard-container">
+        
+        <!-- SECTION 1: INPUT DETAILS -->
+        <div class="panel">
+            <div class="panel-header">Section 1: Dataset Input</div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 15px;">
+                Reading Window <span id="windowIdx" style="color:#fff">0</span> / <span id="windowTotal">0</span> from UCI-HAR Test Set
+            </p>
+            <div class="waveform-container">
+                <div class="canvas-wrapper">
+                    <div class="canvas-label">ACCELEROMETER (m/s²)</div>
+                    <canvas id="accCanvas"></canvas>
+                </div>
+                <div class="canvas-wrapper">
+                    <div class="canvas-label">GYROSCOPE (rad/s)</div>
+                    <canvas id="gyroCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECTION 2: MODEL WORKING -->
+        <div class="panel">
+            <div class="panel-header">Section 2: ESP32 Pipeline</div>
+            <div class="pipeline">
+                <div class="node" id="node1">
+                    <h3>Dataset Serializer</h3>
+                    <p>Pack 50x6 Float Array (1200 bytes)</p>
+                </div>
+                <div class="arrow" id="arr1"></div>
+                
+                <div class="node" id="node2">
+                    <h3>UART Transmission</h3>
+                    <p>Tx @ 921600 Baud to ESP32 Edge</p>
+                </div>
+                <div class="arrow" id="arr2"></div>
+
+                <div class="node" id="node3">
+                    <h3>TFLite Micro Inference</h3>
+                    <p>ESP32 Neural Engine Processing</p>
+                </div>
+                <div class="arrow" id="arr3"></div>
+
+                <div class="node" id="node4">
+                    <h3>UART Reception</h3>
+                    <p>Rx Confidence & Class Index</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECTION 3: OUTPUT -->
+        <div class="panel">
+            <div class="panel-header">Section 3: Edge Output</div>
+            
+            <div class="output-main">
+                <div class="pred-label">Predicted Activity</div>
+                <div class="pred-value" id="predValue">WAITING</div>
+            </div>
+
+            <div class="conf-list" id="confList">
+                <!-- Populated by JS -->
+            </div>
+
+            <div class="telemetry">
+                <div>Edge Latency: <span class="t-val" id="telLat">0.00</span> ms</div>
+                <div>Status: <span class="t-val" id="telStat" style="color:var(--success)">Idle</span></div>
+            </div>
+        </div>
+
+    </div>
+
+<script>
+    let ws;
+    let isSimulating = false;
+    let labels = [];
+
+    const accCtx = document.getElementById('accCanvas').getContext('2d');
+    const gyroCtx = document.getElementById('gyroCanvas').getContext('2d');
+    
+    function setupCanvas(canvas) {
+        const rect = canvas.parentElement.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+    }
+
+    window.addEventListener('resize', () => {
+        setupCanvas(document.getElementById('accCanvas'));
+        setupCanvas(document.getElementById('gyroCanvas'));
+    });
+
+    function drawWaveform(ctx, canvas, data, colors) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!data || data.length === 0) return;
+
+        const w = canvas.width;
+        const h = canvas.height;
+        const pts = data.length;
+
+        // Auto scale
+        let min = 999, max = -999;
+        data.forEach(d => {
+            if(d.x < min) min = d.x; if(d.x > max) max = d.x;
+            if(d.y < min) min = d.y; if(d.y > max) max = d.y;
+            if(d.z < min) min = d.z; if(d.z > max) max = d.z;
+        });
+        const range = (max - min) || 1;
+        const scaleY = (val) => h - ((val - min) / range) * (h - 20) - 10;
+
+        // Draw Zero Line
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        const zero = scaleY(0);
+        ctx.moveTo(0, zero); ctx.lineTo(w, zero);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const axes = ['x', 'y', 'z'];
+        axes.forEach((axis, i) => {
+            ctx.strokeStyle = colors[i];
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for(let j=0; j<pts; j++) {
+                const px = (j / (pts - 1)) * w;
+                const py = scaleY(data[j][axis]);
+                if(j===0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+        });
+    }
+
+    function initConfList() {
+        const container = document.getElementById('confList');
+        container.innerHTML = '';
+        labels.forEach((lbl, i) => {
+            container.innerHTML += `
+                <div class="conf-item">
+                    <div class="c-name">${lbl}</div>
+                    <div class="c-bar-bg"><div class="c-bar-fill" id="bar_${i}"></div></div>
+                    <div class="c-pct" id="pct_${i}">0%</div>
+                </div>
+            `;
+        });
+    }
+
+    async function animatePipeline() {
+        const nodes = ['node1', 'arr1', 'node2', 'arr2', 'node3', 'arr3', 'node4'];
+        for(let i=0; i<nodes.length; i++) {
+            const el = document.getElementById(nodes[i]);
+            el.classList.add('active');
+            await new Promise(r => setTimeout(r, 80));
+            setTimeout(() => el.classList.remove('active'), 200);
+        }
+    }
+
+    function connect() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws/hil`);
+        
+        ws.onopen = () => {
+            document.getElementById('telStat').textContent = "WS Connected";
+        };
+
+        ws.onmessage = (evt) => {
+            const msg = JSON.parse(evt.data);
+            
+            if (msg.type === "init") {
+                document.getElementById('modeBadge').textContent = msg.mode;
+                labels = msg.labels;
+                initConfList();
+                setupCanvas(document.getElementById('accCanvas'));
+                setupCanvas(document.getElementById('gyroCanvas'));
+            } 
+            else if (msg.type === "input") {
+                document.getElementById('windowIdx').textContent = msg.dataset_index;
+                document.getElementById('windowTotal').textContent = msg.total_windows;
+                
+                drawWaveform(accCtx, document.getElementById('accCanvas'), msg.acc, ['#ff4d4d', '#00e676', '#00d2ff']);
+                drawWaveform(gyroCtx, document.getElementById('gyroCanvas'), msg.gyro, ['#ffa726', '#ba68c8', '#4dd0e1']);
+                
+                animatePipeline();
+            }
+            else if (msg.type === "output") {
+                const pv = document.getElementById('predValue');
+                pv.textContent = msg.prediction;
+                pv.classList.add('highlight');
+                setTimeout(() => pv.classList.remove('highlight'), 300);
+
+                document.getElementById('telLat').textContent = msg.inference_ms.toFixed(2);
+                document.getElementById('telStat').textContent = "HIL Active";
+
+                msg.probabilities.forEach((prob, i) => {
+                    const pct = Math.round(prob * 100);
+                    document.getElementById(`bar_${i}`).style.width = pct + '%';
+                    document.getElementById(`pct_${i}`).textContent = pct + '%';
+                    
+                    // Highlight max
+                    if(prob > 0.5) {
+                        document.getElementById(`bar_${i}`).style.background = 'linear-gradient(90deg, #00e676, #b2ff59)';
+                    } else {
+                        document.getElementById(`bar_${i}`).style.background = 'linear-gradient(90deg, #00d2ff, #3a7bd5)';
+                    }
+                });
+            }
+        };
+
+        ws.onclose = () => {
+            document.getElementById('telStat').textContent = "Disconnected";
+            document.getElementById('telStat').style.color = "#ff4d4d";
+            setTimeout(connect, 2000);
+        };
+    }
+
+    function toggleSim() {
+        isSimulating = !isSimulating;
+        const btn = document.getElementById('toggleBtn');
+        btn.textContent = isSimulating ? "Stop Simulation" : "Start Simulation";
+        btn.style.background = isSimulating ? "linear-gradient(135deg, #ff4d4d, #c62828)" : "linear-gradient(135deg, #00d2ff, #3a7bd5)";
+        
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: "toggle_simulation", state: isSimulating }));
+        }
+    }
+
+    // Init
+    connect();
+
+</script>
+</body>
+</html>

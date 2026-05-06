@@ -29,8 +29,8 @@
 #define TIME_STEPS         50
 #define NUM_CHANNELS       6
 #define NUM_CLASSES        11
-#define TENSOR_ARENA_SIZE  (60 * 1024)  // 60 KB — increased for 11-class model
-#define CONFIDENCE_THRESHOLD 0.40f      // minimum confidence to report activity
+#define TENSOR_ARENA_SIZE  (40 * 1024)  // 40 KB — adjust if needed
+#define CONFIDENCE_THRESHOLD 0.3f       // minimum confidence to report activity
 
 // ============================================================================
 // Activity Labels
@@ -51,15 +51,13 @@ static const char* ACTIVITY_LABELS[NUM_CLASSES] = {
 
 // ============================================================================
 // Per-channel normalization constants (from training)
-// Updated from pocket_v3 checkpoint with corrected units (all m/s²)
+// Updated from exports/esp32_v2/normalization_stats.json
 // ============================================================================
 static const float NORM_MEAN[NUM_CHANNELS] = {
-    -3.1886296272f, 1.2004078627f, 2.4552721977f,
-    -0.0335379131f, -0.0226027351f, 0.0529510267f
+    1.9352865f, 3.705785f, 0.23090644f, -0.02979615f, -0.04969823f, 0.04553811f
 };
 static const float NORM_STD[NUM_CHANNELS] = {
-    6.3020558357f, 6.4955196381f, 3.8114185333f,
-    1.0866706371f, 0.8430932164f, 1.2929021120f
+    5.3360248f, 7.3998132f, 4.6662188f, 0.47728997f, 0.55818295f, 0.37370721f
 };
 
 // ============================================================================

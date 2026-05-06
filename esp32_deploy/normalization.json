@@ -1,0 +1,59 @@
+{
+  "normalization": {
+    "mean": [
+      1.935286521911621,
+      3.705785036087036,
+      0.2309064418077469,
+      -0.02979615144431591,
+      -0.049698229879140854,
+      0.04553810879588127
+    ],
+    "std": [
+      5.336024761199951,
+      7.399813175201416,
+      4.6662187576293945,
+      0.47728997468948364,
+      0.558182954788208,
+      0.37370720505714417
+    ],
+    "target_time_steps": 50,
+    "input_channels": 6,
+    "num_classes": 11,
+    "labels": [
+      "Walking",
+      "Sitting",
+      "Standing",
+      "Lying Down",
+      "Stairs Up",
+      "Stairs Down",
+      "Jogging",
+      "Jumping",
+      "Cycling",
+      "Running",
+      "Waist Bending"
+    ]
+  },
+  "labels": [
+    "Walking",
+    "Sitting",
+    "Standing",
+    "Lying Down",
+    "Stairs Up",
+    "Stairs Down",
+    "Jogging",
+    "Jumping",
+    "Cycling",
+    "Running",
+    "Waist Bending"
+  ],
+  "num_classes": 11,
+  "input_shape": [
+    1,
+    50,
+    6
+  ],
+  "output_shape": [
+    1,
+    11
+  ]
+}

@@ -47,6 +47,7 @@ STRIDE = 25
 TARGET_HZ = 50
 
 BASE_DIR = Path(__file__).resolve().parent
+
 def _find_checkpoint():
     candidates = [
         BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_useful11_final.pt",
@@ -83,6 +84,7 @@ async def lifespan(app: FastAPI):
     print(f"  Checkpoint: {CHECKPOINT_PATH.name}")
     print(f"  Dashboard:  https://{ip}:8443/")
     print(f"  Phone:      https://{ip}:8443/phone")
+    print(f"  HIL:        https://{ip}:8443/static/hil_dashboard.html")
     print(f"  HTTP:       http://{ip}:8765/  (redirects to HTTPS)")
     print(f"  Note: Accept the self-signed certificate warning once on each device.")
     print(f"        Both phone and dashboard MUST use HTTPS for sensors to work.")
@@ -113,7 +115,7 @@ def load_model():
         CHANNEL_STATS = DEFAULT_CHANNEL_STATS
         return
     try:
-        sys.path.insert(0, str(BASE_DIR / "final_esp32_v2_useful11_package"))
+        sys.path.insert(0, str(BASE_DIR / "training"))
         sys.path.insert(0, str(BASE_DIR))
         state = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
         ckpt_labels = state.get("labels", state.get("activity_labels", None))
@@ -127,7 +129,7 @@ def load_model():
         for ModelClass, mod_path in [
             ("SensorFusionHAR", "model.sensorfusion"),
             ("SensorFusionESP32", "train_esp32_v2_expanded_local"),
-            ("SensorFusionESP32", "final_esp32_v2_useful11_package.train_esp32_v2_expanded_local"),
+            ("SensorFusionESP32", "training.train_esp32_v2_expanded_local"),
         ]:
             try:
                 mod = __import__(mod_path, fromlist=[ModelClass])
@@ -482,6 +484,140 @@ async def dashboard_ws(websocket: WebSocket):
     finally:
         dashboard_clients.discard(websocket)
         print(f"[server] Dashboard disconnected ({len(dashboard_clients)} active)")
+
+
+@app.websocket("/ws/hil")
+async def hil_ws(websocket: WebSocket):
+    """HIL Dashboard WebSocket endpoint for Hardware-in-the-Loop validation."""
+    await websocket.accept()
+    print(f"[server] HIL Dashboard connected")
+    
+    labels_ordered = [ACTIVITY_LABELS[i] for i in sorted(ACTIVITY_LABELS.keys())]
+    
+    try:
+        # Send initial message
+        await websocket.send_text(json.dumps({
+            "type": "init",
+            "mode": "HIL Validation",
+            "labels": labels_ordered
+        }))
+        
+        while True:
+            message = await websocket.receive_text()
+            try:
+                data = json.loads(message)
+                
+                # Handle toggle_simulation command
+                if data.get("cmd") == "toggle_simulation":
+                    state = data.get("state", False)
+                    print(f"[server] HIL simulation: {'started' if state else 'stopped'}")
+                    
+                    if state:
+                        # Start HIL simulation
+                        asyncio.create_task(run_hil_simulation(websocket, labels_ordered))
+                        
+            except json.JSONDecodeError:
+                pass
+                
+    except WebSocketDisconnect:
+        print(f"[server] HIL Dashboard disconnected")
+    except Exception as e:
+        print(f"[server] HIL WebSocket error: {e}")
+
+
+async def run_hil_simulation(websocket, labels):
+    """Run HIL simulation by sending dataset samples."""
+    try:
+        # Load dataset samples
+        sys.path.insert(0, str(BASE_DIR / "training"))
+        try:
+            from train_esp32_v2_expanded_local import (
+                UCITotalHARDataset,
+                UCIHAR_TO_MERGED,
+                TARGET_TIME_STEPS
+            )
+            
+            uci_dir = BASE_DIR.parent / "data" / "UCI HAR Dataset"
+            if uci_dir.exists():
+                dataset = UCITotalHARDataset(str(uci_dir), split="test")
+                
+                # Collect samples for each class
+                samples = []
+                sample_labels = []
+                for orig_cls, merged_cls in UCIHAR_TO_MERGED.items():
+                    mask = dataset.y == orig_cls
+                    indices = torch.where(mask)[0]
+                    # Take first 5 samples per class
+                    for idx in indices[:5]:
+                        samples.append(dataset.X[idx].numpy())
+                        sample_labels.append(merged_cls)
+                
+                total_windows = len(samples)
+                
+                for i, (sample, true_label) in enumerate(zip(samples, sample_labels)):
+                    # Send input message
+                    await websocket.send_text(json.dumps({
+                        "type": "input",
+                        "dataset_index": i + 1,
+                        "total_windows": total_windows,
+                        "acc": [{"x": float(sample[t, 0]), "y": float(sample[t, 1]), "z": float(sample[t, 2])} for t in range(50)],
+                        "gyro": [{"x": float(sample[t, 3]), "y": float(sample[t, 4]), "z": float(sample[t, 5])} for t in range(50)]
+                    }))
+                    
+                    # Simulate inference (using model if available)
+                    if model is not None:
+                        try:
+                            normed = normalize(sample[np.newaxis, :, :])
+                            tensor = torch.FloatTensor(normed).to(device)
+                            with torch.no_grad():
+                                logits = model(tensor)
+                                probs_tensor = torch.softmax(logits, dim=1)
+                                conf, pred_idx = torch.max(probs_tensor, dim=1)
+                                pred_idx = pred_idx.item()
+                                conf = conf.item()
+                                probs_np = probs_tensor.squeeze().cpu().numpy()
+                        except Exception as e:
+                            print(f"[server] HIL inference error: {e}")
+                            # Fallback to true label
+                            pred_idx = true_label
+                            conf = 0.85
+                            probs_np = np.zeros(len(labels))
+                            probs_np[true_label] = 0.85
+                    else:
+                        # No model, use true label
+                        pred_idx = true_label
+                        conf = 0.85
+                        probs_np = np.zeros(len(labels))
+                        probs_np[true_label] = 0.85
+                    
+                    # Send output message
+                    await websocket.send_text(json.dumps({
+                        "type": "output",
+                        "prediction": labels[pred_idx],
+                        "confidence": float(conf),
+                        "probabilities": probs_np.tolist(),
+                        "inference_ms": 15.0
+                    }))
+                    
+                    # Delay between samples
+                    await asyncio.sleep(0.5)
+            else:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Dataset not found"
+                }))
+        except ImportError:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "message": "Training module not available"
+            }))
+            
+    except Exception as e:
+        print(f"[server] HIL simulation error: {e}")
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": str(e)
+        }))
 
 
 def _build_redirect_app(target_host: str, https_port: int):

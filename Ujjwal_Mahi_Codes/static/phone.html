@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>HAR - Phone</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{min-height:100%;overflow-x:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f5f6f8;color:#2c3e50;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:16px;-webkit-user-select:none;user-select:none}
+.header{width:100%;max-width:420px;background:#fff;border:1px solid #e1e4e8;border-radius:10px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.header h1{font-size:1.35rem;font-weight:700;color:#1a1a2e;letter-spacing:0}
+.header .sub{font-size:.8rem;color:#8898aa;margin-top:3px}
+.status-bar{width:100%;max-width:420px;display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:.86rem;font-weight:600;background:#fff;border:1px solid #e1e4e8;border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.status-dot{width:9px;height:9px;border-radius:50%;background:#c8d0d8;transition:background .3s}
+.status-dot.connected{background:#27ae60}
+.status-dot.streaming{background:#e67e22}
+.status-dot.disconnected{background:#e74c3c}
+.status-text{color:#525f7f}
+#startBtn{width:100%;max-width:420px;padding:16px 0;border:none;border-radius:8px;font-size:1rem;font-weight:700;cursor:pointer;transition:all .2s;background:#1f6feb;color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:12px}
+#startBtn:active{transform:scale(.985)}
+#startBtn.active{background:#d73a49}
+.sensor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%;max-width:420px;margin-bottom:12px}
+.sensor-card{background:#fafbfc;border:1px solid #e1e4e8;border-radius:8px;padding:12px;text-align:center}
+.sensor-card .label{font-size:.65rem;color:#8898aa;text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px;font-weight:600}
+.sensor-card .value{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:1.05rem;font-weight:700;color:#2c3e50}
+.sensor-section-title{font-size:.68rem;color:#8898aa;text-transform:uppercase;letter-spacing:1px;margin:8px 0 10px;width:100%;max-width:420px;text-align:left;font-weight:700}
+.prediction-box{width:100%;max-width:420px;background:#fff;border:1px solid #e1e4e8;border-radius:10px;padding:16px;text-align:center;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.prediction-box .pred-label{font-size:.68rem;color:#8898aa;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:600}
+.prediction-box .pred-value{font-size:1.6rem;font-weight:800;color:#1f6feb;transition:color .3s}
+.counter{width:100%;max-width:420px;background:#fff;border:1px solid #e1e4e8;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:.78rem;color:#525f7f;line-height:1.45;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.https-banner{width:100%;max-width:420px;background:#fff8e1;border:1px solid #ffd54f;border-radius:10px;padding:14px;margin-bottom:12px;color:#5d4037;font-size:.82rem;line-height:1.5}
+.https-banner a{display:inline-block;margin-top:8px;padding:8px 14px;background:#1f6feb;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;font-size:.85rem}
+.https-banner b{color:#bf360c}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>HAR</h1>
+<div class="sub">Phone Sensor Streamer</div>
+</div>
+<div class="https-banner" id="httpsBanner" style="display:none">
+<b>Switch to HTTPS for sensors</b><br>
+Android Chrome blocks motion sensors on HTTP. Tap below, accept the certificate warning, and reload.
+<br><a id="httpsLink" href="#">Open HTTPS Page</a>
+</div>
+<div class="status-bar">
+<div class="status-dot" id="statusDot"></div>
+<span class="status-text" id="statusText">Disconnected</span>
+</div>
+<button id="startBtn">Start Streaming</button>
+<div class="prediction-box">
+<div class="pred-label">Current Activity</div>
+<div class="pred-value" id="predValue">--</div>
+</div>
+<div class="sensor-section-title">Accelerometer (m/s²)</div>
+<div class="sensor-grid">
+<div class="sensor-card"><div class="label">Accel X</div><div class="value" id="ax">0.000</div></div>
+<div class="sensor-card"><div class="label">Accel Y</div><div class="value" id="ay">0.000</div></div>
+<div class="sensor-card"><div class="label">Accel Z</div><div class="value" id="az">0.000</div></div>
+<div class="sensor-card"><div class="label">Samples</div><div class="value" id="sampleCount">0</div></div>
+</div>
+<div class="sensor-section-title">Gyroscope (rad/s)</div>
+<div class="sensor-grid">
+<div class="sensor-card"><div class="label">Gyro X</div><div class="value" id="gx">0.000</div></div>
+<div class="sensor-card"><div class="label">Gyro Y</div><div class="value" id="gy">0.000</div></div>
+<div class="sensor-card"><div class="label">Gyro Z</div><div class="value" id="gz">0.000</div></div>
+<div class="sensor-card"><div class="label">Rate (Hz)</div><div class="value" id="rateHz">0</div></div>
+</div>
+<div class="counter" id="connInfo"></div>
+<script>
+(function(){
+var ws=null;
+var streaming=false;
+var sampleCount=0;
+var rateCount=0;
+var rateTs=0;
+var reconnectTimer=null;
+var noMotionTimer=null;
+var lastMotionCount=0;
+var isSecureOrigin=window.isSecureContext||location.hostname==="localhost"||location.hostname==="127.0.0.1";
+var accelSensor=null;
+var gyroSensor=null;
+var latestAccel={x:0,y:0,z:0};
+var latestGyro={x:0,y:0,z:0};
+var sensorInterval=null;
+var activityColors={
+"WALKING":"#4CAF50",
+"WALKING_UP":"#FF9800",
+"WALKING_DOWN":"#2196F3",
+"SITTING":"#9C27B0",
+"STANDING":"#F44336",
+"LAYING":"#00BCD4",
+"Walking":"#4CAF50",
+"Walking Upstairs":"#FF9800",
+"Walking Downstairs":"#2196F3",
+"Sitting":"#9C27B0",
+"Standing":"#F44336",
+"Laying":"#00BCD4"
+};
+
+var btn=document.getElementById("startBtn");
+var statusDot=document.getElementById("statusDot");
+var statusText=document.getElementById("statusText");
+var predValue=document.getElementById("predValue");
+var sampleCountEl=document.getElementById("sampleCount");
+var rateHzEl=document.getElementById("rateHz");
+var axEl=document.getElementById("ax");
+var ayEl=document.getElementById("ay");
+var azEl=document.getElementById("az");
+var gxEl=document.getElementById("gx");
+var gyEl=document.getElementById("gy");
+var gzEl=document.getElementById("gz");
+var connInfo=document.getElementById("connInfo");
+var httpsBanner=document.getElementById("httpsBanner");
+var httpsLink=document.getElementById("httpsLink");
+
+(function setupHttpsBanner(){
+var host=location.hostname;
+var isLocal=host==="localhost"||host==="127.0.0.1";
+if(location.protocol==="http:"&&!isLocal){
+var httpsUrl="https://"+host+":8443/phone";
+httpsLink.href=httpsUrl;
+httpsBanner.style.display="block";
+}
+})();
+
+function setStatus(state,text){
+statusDot.className="status-dot "+state;
+statusText.textContent=text;
+}
+
+function fmt(v){
+if(v===null||v===undefined)return"0.000";
+return v.toFixed(3);
+}
+
+function connectWS(){
+if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
+try{
+var scheme=window.location.protocol==="https:"?"wss://":"ws://";
+ws=new WebSocket(scheme+window.location.host+"/ws/phone");
+}catch(e){
+setStatus("disconnected","Connection Failed");
+connInfo.textContent="WebSocket connection failed.";
+scheduleReconnect();
+return;
+}
+ws.onopen=function(){
+setStatus("connected","Connected");
+connInfo.textContent="Connected to server. On Android Chrome, tap Start Streaming and keep this page open.";
+if(streaming)setStatus("streaming","Streaming");
+};
+ws.onclose=function(){
+setStatus("disconnected","Disconnected");
+connInfo.textContent="Disconnected from server. Reconnecting...";
+scheduleReconnect();
+};
+ws.onerror=function(){
+try{ws.close();}catch(e){}
+};
+ws.onmessage=function(evt){
+try{
+var msg=JSON.parse(evt.data);
+if(msg.activity){
+predValue.textContent=msg.activity;
+predValue.style.color=activityColors[msg.activity]||"#7c8aff";
+}
+}catch(e){}
+};
+}
+
+function scheduleReconnect(){
+if(reconnectTimer)return;
+reconnectTimer=setTimeout(function(){
+reconnectTimer=null;
+connectWS();
+},2000);
+}
+
+function onMotion(e){
+if(!streaming)return;
+if(!ws||ws.readyState!==WebSocket.OPEN){
+console.log("[phone] Motion event but WS not open");
+return;
+}
+
+var ax=0,ay=0,az=0;
+var ag=e.accelerationIncludingGravity;
+if(ag&&ag.x!==null&&ag.x!==undefined){
+ax=ag.x||0;ay=ag.y||0;az=ag.z||0;
+}
+
+var rot=e.rotationRate;
+var gxv=0,gyv=0,gzv=0;
+if(rot){
+var degToRad=Math.PI/180;
+gxv=(rot.alpha||0)*degToRad;gyv=(rot.beta||0)*degToRad;gzv=(rot.gamma||0)*degToRad;
+}
+
+var payload={
+ax:ax,ay:ay,az:az,
+gx:gxv,gy:gyv,gz:gzv,
+t:Date.now()
+};
+
+try{
+ws.send(JSON.stringify(payload));
+if(sampleCount%50===0)console.log("[phone] Sent sample #"+sampleCount,payload);
+}catch(e){
+console.error("[phone] Send failed:",e);
+}
+
+sampleCount++;
+sampleCountEl.textContent=sampleCount;
+axEl.textContent=fmt(ax);
+ayEl.textContent=fmt(ay);
+azEl.textContent=fmt(az);
+gxEl.textContent=fmt(gxv);
+gyEl.textContent=fmt(gyv);
+gzEl.textContent=fmt(gzv);
+
+rateCount++;
+var now=performance.now();
+if(now-rateTs>=1000){
+rateHzEl.textContent=rateCount;
+rateCount=0;
+rateTs=now;
+}
+}
+
+function sendSensorSample(ax,ay,az,gxv,gyv,gzv){
+if(!streaming)return;
+if(!ws||ws.readyState!==WebSocket.OPEN)return;
+var payload={ax:ax,ay:ay,az:az,gx:gxv,gy:gyv,gz:gzv,t:Date.now()};
+try{ws.send(JSON.stringify(payload));}catch(e){}
+sampleCount++;
+sampleCountEl.textContent=sampleCount;
+axEl.textContent=fmt(ax);
+ayEl.textContent=fmt(ay);
+azEl.textContent=fmt(az);
+gxEl.textContent=fmt(gxv);
+gyEl.textContent=fmt(gyv);
+gzEl.textContent=fmt(gzv);
+rateCount++;
+var now=performance.now();
+if(now-rateTs>=1000){
+rateHzEl.textContent=rateCount;
+rateCount=0;
+rateTs=now;
+}
+if(sampleCount===1)connInfo.textContent="Streaming sensor data. Keep this tab open and move the phone.";
+}
+
+function startGenericSensors(){
+if(!('Accelerometer' in window)&&!('Gyroscope' in window))return false;
+try{
+if('Accelerometer' in window){
+accelSensor=new Accelerometer({frequency:50});
+accelSensor.addEventListener('reading',function(){
+latestAccel.x=accelSensor.x||0;
+latestAccel.y=accelSensor.y||0;
+latestAccel.z=accelSensor.z||0;
+});
+accelSensor.start();
+}
+if('Gyroscope' in window){
+gyroSensor=new Gyroscope({frequency:50});
+gyroSensor.addEventListener('reading',function(){
+latestGyro.x=gyroSensor.x||0;
+latestGyro.y=gyroSensor.y||0;
+latestGyro.z=gyroSensor.z||0;
+});
+gyroSensor.start();
+}
+if(sensorInterval)clearInterval(sensorInterval);
+sensorInterval=setInterval(function(){
+sendSensorSample(latestAccel.x,latestAccel.y,latestAccel.z,latestGyro.x,latestGyro.y,latestGyro.z);
+},20);
+connInfo.textContent='Using Android sensor API. Move the phone to stream samples.';
+return true;
+}catch(err){
+connInfo.textContent='Android sensor API is blocked. Falling back to DeviceMotion.';
+return false;
+}
+}
+
+function startStreaming(){
+streaming=true;
+btn.textContent='Stop Streaming';
+btn.classList.add('active');
+try{if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'stream_start',t:Date.now()}));}catch(e){}
+var usedGeneric=startGenericSensors();
+if(!usedGeneric&&typeof DeviceMotionEvent!=='undefined'){
+window.addEventListener('devicemotion',onMotion,true);
+}
+if(!isSecureOrigin){
+connInfo.textContent="Waiting for motion sensor samples. Android Chrome may block motion sensors on HTTP pages; if samples stay at 0, use an HTTPS tunnel or trusted certificate.";
+}else if(typeof DeviceMotionEvent==="undefined"){
+connInfo.textContent="This Android browser does not expose DeviceMotionEvent. Use Chrome and reload the page.";
+}else if(sampleCount===1)connInfo.textContent="Streaming sensor data. Keep this tab open and move the phone.";
+lastMotionCount=sampleCount;
+if(noMotionTimer)clearTimeout(noMotionTimer);
+noMotionTimer=setTimeout(function(){
+if(streaming&&sampleCount===lastMotionCount){
+setStatus("connected","No Motion Data");
+if(!isSecureOrigin){
+connInfo.textContent="No motion data because Android Chrome usually blocks phone sensors on HTTP network URLs like this one. Use HTTPS for the phone page, then reload and tap Start Streaming.";
+}else{
+connInfo.textContent="Android did not send motion events. Use Chrome, reload this page, tap Start Streaming again, keep the screen awake, and check Chrome site settings if sensors are blocked.";
+}
+}
+},3500);
+if(ws&&ws.readyState===WebSocket.OPEN){
+setStatus("streaming","Streaming");
+}
+rateTs=performance.now();
+rateCount=0;
+}
+
+function stopStreaming(){
+streaming=false;
+try{if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:"stream_stop",t:Date.now()}));}catch(e){}
+if(noMotionTimer){clearTimeout(noMotionTimer);noMotionTimer=null;}
+if(sensorInterval){clearInterval(sensorInterval);sensorInterval=null;}
+try{if(accelSensor)accelSensor.stop();}catch(e){}
+try{if(gyroSensor)gyroSensor.stop();}catch(e){}
+accelSensor=null;
+gyroSensor=null;
+btn.textContent="Start Streaming";
+btn.classList.remove("active");
+window.removeEventListener("devicemotion",onMotion,true);
+if(ws&&ws.readyState===WebSocket.OPEN){
+setStatus("connected","Connected");
+}else{
+setStatus("disconnected","Disconnected");
+}
+}
+
+btn.addEventListener("click",function(){
+if(streaming){
+stopStreaming();
+return;
+}
+
+if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function"){
+DeviceOrientationEvent.requestPermission().then(function(state){
+if(state==="granted"){
+if(typeof DeviceMotionEvent!=="undefined"&&typeof DeviceMotionEvent.requestPermission==="function"){
+DeviceMotionEvent.requestPermission().then(function(s2){
+if(s2==="granted"){
+connectWS();
+startStreaming();
+}
+}).catch(function(){});
+}else{
+connectWS();
+startStreaming();
+}
+}
+}).catch(function(){});
+}else if(typeof DeviceMotionEvent!=="undefined"&&typeof DeviceMotionEvent.requestPermission==="function"){
+DeviceMotionEvent.requestPermission().then(function(state){
+if(state==="granted"){
+connectWS();
+startStreaming();
+}
+}).catch(function(){});
+}else{
+connectWS();
+startStreaming();
+}
+});
+
+connectWS();
+})();
+</script>
+</body>
+</html>
