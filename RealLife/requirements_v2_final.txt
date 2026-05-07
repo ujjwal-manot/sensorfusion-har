@@ -5,6 +5,9 @@ matplotlib
 torch
 onnx
 pytest
+fastapi
+uvicorn[standard]
+cryptography
 # Optional Colab/Python 3.10-3.11 deployment conversion dependencies:
 # tensorflow
 # onnx2tf

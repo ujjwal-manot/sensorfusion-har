@@ -84,6 +84,9 @@ var gyroSensor=null;
 var latestAccel={x:0,y:0,z:0};
 var latestGyro={x:0,y:0,z:0};
 var sensorInterval=null;
+var sensorSource="none";
+var accelMode="none";
+var gyroMode="none";
 var activityColors={
 "WALKING":"#4CAF50",
 "WALKING_UP":"#FF9800",
@@ -92,11 +95,17 @@ var activityColors={
 "STANDING":"#F44336",
 "LAYING":"#00BCD4",
 "Walking":"#4CAF50",
-"Walking Upstairs":"#FF9800",
-"Walking Downstairs":"#2196F3",
+"Stairs Up":"#FF9800",
+"Stairs Down":"#2196F3",
 "Sitting":"#9C27B0",
 "Standing":"#F44336",
-"Laying":"#00BCD4"
+"Lying Down":"#00BCD4",
+"Jogging":"#8BC34A",
+"Jumping":"#FFEB3B",
+"Cycling":"#795548",
+"Running":"#E91E63",
+"Waist Bending":"#607D8B",
+"Uncertain":"#8898aa"
 };
 
 var btn=document.getElementById("startBtn");
@@ -149,7 +158,11 @@ return;
 ws.onopen=function(){
 setStatus("connected","Connected");
 connInfo.textContent="Connected to server. On Android Chrome, tap Start Streaming and keep this page open.";
-if(streaming)setStatus("streaming","Streaming");
+if(streaming){
+setStatus("streaming","Streaming");
+predValue.textContent="--";
+try{ws.send(JSON.stringify({type:'stream_start',t:Date.now()}));}catch(e){}
+}
 };
 ws.onclose=function(){
 setStatus("disconnected","Disconnected");
@@ -190,18 +203,24 @@ var ag=e.accelerationIncludingGravity;
 if(ag&&ag.x!==null&&ag.x!==undefined){
 ax=ag.x||0;ay=ag.y||0;az=ag.z||0;
 }
+sensorSource="DeviceMotion";
+accelMode="accelerationIncludingGravity";
 
 var rot=e.rotationRate;
 var gxv=0,gyv=0,gzv=0;
 if(rot){
 var degToRad=Math.PI/180;
 gxv=(rot.alpha||0)*degToRad;gyv=(rot.beta||0)*degToRad;gzv=(rot.gamma||0)*degToRad;
+gyroMode="rotationRate";
 }
 
 var payload={
 ax:ax,ay:ay,az:az,
 gx:gxv,gy:gyv,gz:gzv,
-t:Date.now()
+t:Date.now(),
+source:sensorSource,
+accelMode:accelMode,
+gyroMode:gyroMode
 };
 
 try{
@@ -232,7 +251,7 @@ rateTs=now;
 function sendSensorSample(ax,ay,az,gxv,gyv,gzv){
 if(!streaming)return;
 if(!ws||ws.readyState!==WebSocket.OPEN)return;
-var payload={ax:ax,ay:ay,az:az,gx:gxv,gy:gyv,gz:gzv,t:Date.now()};
+var payload={ax:ax,ay:ay,az:az,gx:gxv,gy:gyv,gz:gzv,t:Date.now(),source:sensorSource,accelMode:accelMode,gyroMode:gyroMode};
 try{ws.send(JSON.stringify(payload));}catch(e){}
 sampleCount++;
 sampleCountEl.textContent=sampleCount;
@@ -249,7 +268,7 @@ rateHzEl.textContent=rateCount;
 rateCount=0;
 rateTs=now;
 }
-if(sampleCount===1)connInfo.textContent="Streaming sensor data. Keep this tab open and move the phone.";
+if(sampleCount===1)connInfo.textContent="Streaming sensor data from "+sensorSource+" ("+accelMode+"). Keep this tab open and move the phone.";
 }
 
 function startGenericSensors(){
@@ -263,6 +282,8 @@ latestAccel.y=accelSensor.y||0;
 latestAccel.z=accelSensor.z||0;
 });
 accelSensor.start();
+sensorSource='Generic Sensor API';
+accelMode='Accelerometer';
 }
 if('Gyroscope' in window){
 gyroSensor=new Gyroscope({frequency:50});
@@ -272,12 +293,13 @@ latestGyro.y=gyroSensor.y||0;
 latestGyro.z=gyroSensor.z||0;
 });
 gyroSensor.start();
+gyroMode='Gyroscope';
 }
 if(sensorInterval)clearInterval(sensorInterval);
 sensorInterval=setInterval(function(){
 sendSensorSample(latestAccel.x,latestAccel.y,latestAccel.z,latestGyro.x,latestGyro.y,latestGyro.z);
 },20);
-connInfo.textContent='Using Android sensor API. Move the phone to stream samples.';
+connInfo.textContent='Using Android Generic Sensor API. Check dashboard Acc Mean: stationary phone should be near 9.8 m/s² if gravity is present.';
 return true;
 }catch(err){
 connInfo.textContent='Android sensor API is blocked. Falling back to DeviceMotion.';
@@ -287,6 +309,12 @@ return false;
 
 function startStreaming(){
 streaming=true;
+sampleCount=0;
+rateCount=0;
+lastMotionCount=0;
+sampleCountEl.textContent=sampleCount;
+rateHzEl.textContent=0;
+predValue.textContent="--";
 btn.textContent='Stop Streaming';
 btn.classList.add('active');
 try{if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'stream_start',t:Date.now()}));}catch(e){}

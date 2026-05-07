@@ -1,0 +1,93 @@
+Loaded source: best_sensorfusion_esp32_v2_useful11_pocket_v2.pt  metrics={'acc': 0.8935640138408304, 'macro_f1': 0.9027877942251741, 'min_f1': 0.8342412451361868, 'rotation_robustness_pct': 90.90189873417721}
+[MotionSense] Already extracted at C:\Users\Ujjwal\sensorfusion-har\RealLife\data\motionsense\A_DeviceMotion_data
+MotionSense train windows: 20284
+MotionSense class distribution:
+  Walking        5062
+  Sitting        5187
+  Standing       4397
+  Stairs Up      2229
+  Stairs Down    1898
+  Jogging        1511
+[INFO] PAMAP2 not found at data/PAMAP2_Dataset, skipping rare-activity boost
+[WISDM] Downloading from GitHub...
+[WARNING] WISDM load failed: HTTP Error 404: Not Found
+MHEALTH rare-activity windows: 1810
+  Lying Down     421
+  Jumping        137
+  Cycling        421
+  Running        423
+  Waist Bending  408
+
+Calibration windows: 256, high-conf kept: 252
+Non-MotionSense calib windows (for rare activities): 209
+Pseudo-label (non-MS) distribution:
+  Lying Down     27
+  Jumping        125
+  Running        57
+
+Combined training set (before oversampling): 22303 windows
+Combined class distribution (before oversampling):
+  Walking        5062
+  Sitting        5187
+  Standing       4397
+  Lying Down     448
+  Stairs Up      2229
+  Stairs Down    1898
+  Jogging        1511
+  Jumping        262
+  Cycling        421
+  Running        480
+  Waist Bending  408
+  Oversampled Lying Down    : 448 -> 800
+  Oversampled Jumping       : 262 -> 800
+  Oversampled Cycling       : 421 -> 800
+  Oversampled Running       : 480 -> 800
+  Oversampled Waist Bending : 408 -> 800
+
+Combined training set (after oversampling): 24284 windows
+Combined class distribution (after oversampling):
+  Walking        5062
+  Sitting        5187
+  Standing       4397
+  Lying Down     800
+  Stairs Up      2229
+  Stairs Down    1898
+  Jogging        1511
+  Jumping        800
+  Cycling        800
+  Running        800
+  Waist Bending  800
+
+Training 66201/75290 parameters (87.9% of model)
+
+Augmented dataset size: 194272 windows
+Epochs: 20  Label smoothing: 0.08
+Starting fine-tune...
+
+epoch  1/20  loss=0.7885  acc=88.53%
+epoch  2/20  loss=0.6872  acc=91.57%
+epoch  3/20  loss=0.6679  acc=92.18%
+epoch  4/20  loss=0.6571  acc=92.54%
+epoch  5/20  loss=0.6518  acc=92.64%
+epoch  6/20  loss=0.6467  acc=92.88%
+epoch  7/20  loss=0.6445  acc=92.91%
+epoch  8/20  loss=0.6392  acc=93.15%
+epoch  9/20  loss=0.6370  acc=93.20%
+epoch 10/20  loss=0.6341  acc=93.29%
+epoch 11/20  loss=0.6305  acc=93.43%
+epoch 12/20  loss=0.6282  acc=93.49%
+epoch 13/20  loss=0.6260  acc=93.54%
+epoch 14/20  loss=0.6253  acc=93.58%
+epoch 15/20  loss=0.6219  acc=93.68%
+epoch 16/20  loss=0.6205  acc=93.79%
+epoch 17/20  loss=0.6204  acc=93.76%
+epoch 18/20  loss=0.6192  acc=93.85%
+epoch 19/20  loss=0.6202  acc=93.72%
+epoch 20/20  loss=0.6181  acc=93.88%
+
+=== Robustness benchmark (gravity-align ON for both) ===
+Source useful11_final: 91.1%
+Pocket-robust target:  96.2%  (delta +5.1 pp)
+
+Saved: C:\Users\Ujjwal\sensorfusion-har\RealLife\checkpoints\best_sensorfusion_esp32_v2_useful11_pocket_v3.pt  (337.1 KB)
+Saved benchmark: C:\Users\Ujjwal\sensorfusion-har\RealLife\outputs\esp32_v2\rotation_finetune_benchmark.json

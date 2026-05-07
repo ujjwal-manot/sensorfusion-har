@@ -3,98 +3,104 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HAR Dashboard V3 - Model Internals</title>
+<title>Human Activity Recognition</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;overflow-x:hidden}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f5f6f8;color:#2c3e50}
+html,body{height:100%;width:100%;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f5f6f8;color:#2c3e50;display:flex;flex-direction:column}
 
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:#fff;border-bottom:1px solid #e1e4e8;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.topbar h1{font-size:1.15rem;font-weight:600;color:#1a1a2e;letter-spacing:0}
-.topbar .status{display:flex;align-items:center;gap:8px;font-size:.8rem;color:#666}
+.topbar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:6px 20px;background:#fff;border-bottom:1px solid #e1e4e8;height:40px}
+.topbar h1{font-size:1rem;font-weight:600;color:#1a1a2e}
+.topbar .status{display:flex;align-items:center;gap:8px;font-size:.75rem;color:#666}
 .topbar .dot{width:8px;height:8px;border-radius:50%;background:#ccc;transition:background .3s}
 .topbar .dot.on{background:#27ae60}
 
-.dashboard-container{display:grid;grid-template-rows:auto auto auto auto;gap:20px;padding:20px;max-width:1600px;margin:0 auto}
+.dashboard-container{
+  flex:1;min-height:0;
+  display:grid;
+  grid-template-rows:auto minmax(0,0.8fr) auto minmax(0,0.9fr) auto minmax(0,1.35fr);
+  gap:5px;
+  padding:6px 10px;
+  overflow:hidden;
+}
 
-.section-header{font-size:.85rem;text-transform:uppercase;letter-spacing:1.5px;color:#8898aa;margin-bottom:12px;font-weight:600;padding-left:8px;border-left:3px solid #1f6feb}
+.section-header{font-size:.82rem;text-transform:uppercase;letter-spacing:1.2px;color:#8898aa;font-weight:700;padding-left:8px;border-left:3px solid #1f6feb;margin-bottom:0;align-self:center}
 
-.section{background:#fff;border:1px solid #e1e4e8;border-radius:8px;padding:20px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.section{background:#fff;border:1px solid #e1e4e8;border-radius:6px;padding:8px 12px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,0.03);min-height:0}
 
 /* Section 1: Input Details */
-.input-section{display:grid;grid-template-columns:2fr 1fr;gap:20px;min-height:320px}
-.waveform-container{display:grid;grid-template-rows:1fr 1fr;gap:12px;min-height:280px}
-.waveform-box{position:relative;background:#fafbfc;border:1px solid #e1e4e8;border-radius:6px;padding:12px;min-height:130px}
-.waveform-label{font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:#8898aa;margin-bottom:6px;font-weight:600}
-.waveform-canvas{width:100%;height:calc(100% - 24px);min-height:100px}
+.input-section{display:grid;grid-template-columns:2fr 1fr;gap:12px;height:100%;min-height:0}
+.waveform-container{display:grid;grid-template-rows:1fr 1fr;gap:8px;min-height:0;height:100%}
+.waveform-box{position:relative;background:#fafbfc;border:1px solid #e1e4e8;border-radius:5px;padding:8px;min-height:0;display:flex;flex-direction:column}
+.waveform-label{font-size:.6rem;text-transform:uppercase;letter-spacing:1px;color:#8898aa;margin-bottom:4px;font-weight:600;flex-shrink:0}
+.waveform-canvas{width:100%;flex:1;min-height:0;display:block}
 
-.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.stat-item{text-align:center;padding:10px;background:#fafbfc;border-radius:6px;border:1px solid #e1e4e8}
-.stat-label{font-size:.6rem;text-transform:uppercase;letter-spacing:.5px;color:#8898aa;margin-bottom:4px;font-weight:600}
-.stat-value{font-size:.95rem;font-weight:700;color:#2c3e50}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.stat-item{text-align:center;padding:4px 3px;background:#fafbfc;border-radius:5px;border:1px solid #e1e4e8}
+.stat-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.4px;color:#8898aa;margin-bottom:2px;font-weight:600}
+.stat-value{font-size:.9rem;font-weight:700;color:#2c3e50}
 .mono{font-family:monospace}
 
-.quality-indicators{display:flex;flex-direction:column;gap:8px;margin-top:12px}
-.quality-item{display:flex;align-items:center;justify-content:space-between;padding:8px;background:#fafbfc;border-radius:6px;border:1px solid #e1e4e8}
-.quality-label{font-size:.7rem;color:#525f7f}
-.quality-bar{width:80px;height:6px;background:#e1e4e8;border-radius:3px;overflow:hidden}
+.quality-indicators{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.quality-item{display:flex;align-items:center;justify-content:space-between;padding:2px 6px;background:#fafbfc;border-radius:5px;border:1px solid #e1e4e8}
+.quality-label{font-size:.72rem;color:#525f7f}
+.quality-bar{width:60px;height:4px;background:#e1e4e8;border-radius:3px;overflow:hidden}
 .quality-fill{height:100%;border-radius:3px;transition:width .3s;background:#3498db}
 
 /* Section 2: Model Working */
-.model-section{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;min-height:420px}
-.model-visual{display:flex;flex-direction:column;height:100%;min-height:380px}
-.model-visual-label{font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#8898aa;margin-bottom:8px;font-weight:600}
-.heatmap-canvas{flex:1;width:100%;background:#fafbfc;border:1px solid #e1e4e8;border-radius:6px;min-height:300px}
-.feature-bars{display:flex;flex-direction:column;gap:4px;overflow-y:auto;padding-right:4px;max-height:350px}
-.feature-bar-row{display:flex;align-items:center;gap:8px;height:20px;flex-shrink:0}
+.model-section{display:grid;grid-template-columns:1fr 1fr;gap:10px;height:100%;min-height:0}
+.model-visual{display:flex;flex-direction:column;height:100%;min-height:0}
+.model-visual-label{font-size:.78rem;text-transform:uppercase;letter-spacing:1px;color:#8898aa;margin-bottom:5px;font-weight:700;flex-shrink:0}
+.heatmap-canvas{flex:1;width:100%;background:#fafbfc;border:1px solid #e1e4e8;border-radius:5px;min-height:0;display:block}
+.feature-bars{display:flex;flex-direction:column;gap:3px;overflow:hidden;flex:1;min-height:0}
+.feature-bar-row{display:flex;align-items:center;gap:6px;height:16px;flex-shrink:0}
 .feature-bar-bg{flex:1;height:100%;background:#f1f3f5;border-radius:3px;overflow:hidden;position:relative;border:1px solid #e1e4e8}
 .feature-bar-fill{height:100%;border-radius:2px;transition:width .3s}
-.feature-index{width:30px;font-size:.65rem;color:#8898aa;text-align:right;font-family:monospace;flex-shrink:0}
+.feature-index{width:28px;font-size:.7rem;color:#8898aa;text-align:right;font-family:monospace;flex-shrink:0}
 
-.pipeline-container{display:flex;align-items:center;justify-content:center;gap:8px;height:100%;padding:20px;flex-wrap:wrap;align-content:center}
-.pipeline-stage{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 16px;background:#fafbfc;border:2px solid #e1e4e8;border-radius:8px;transition:all .3s;min-width:80px}
+.pipeline-container{display:flex;align-items:center;justify-content:center;gap:6px;height:100%;flex-wrap:wrap;align-content:center}
+.pipeline-stage{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 10px;background:#fafbfc;border:2px solid #e1e4e8;border-radius:7px;transition:all .3s;min-width:64px}
 .pipeline-stage.active{border-color:#1f6feb;background:#e3f2fd}
-.pipeline-stage-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.5px;color:#525f7f;font-weight:600}
-.pipeline-stage-time{font-size:.6rem;color:#8898aa;font-family:monospace}
+.pipeline-stage-label{font-size:.58rem;text-transform:uppercase;letter-spacing:.5px;color:#525f7f;font-weight:600}
+.pipeline-stage-time{font-size:.55rem;color:#8898aa;font-family:monospace}
 
 /* Section 3: Output */
-.output-section{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;min-height:200px}
-.prediction-display{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:160px}
-.prediction-name{font-size:2rem;font-weight:700;transition:color .3s;text-align:center;color:#1a1a2e;word-break:break-word}
-.confidence-wrap{width:100%;max-width:220px;margin-top:16px}
-.confidence-bar-bg{width:100%;height:8px;background:#e1e4e8;border-radius:4px;overflow:hidden}
+.output-section{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;height:100%;min-height:0}
+.prediction-display{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:0}
+.prediction-name{font-size:1.7rem;font-weight:800;transition:color .3s;text-align:center;color:#1a1a2e;word-break:break-word;line-height:1.1}
+.confidence-wrap{width:100%;max-width:200px;margin-top:6px}
+.confidence-bar-bg{width:100%;height:6px;background:#e1e4e8;border-radius:4px;overflow:hidden}
 .confidence-bar-fill{height:100%;border-radius:3px;transition:width .3s,background .3s;width:0;background:#3498db}
-.confidence-text{font-size:.75rem;color:#8898aa;margin-top:8px;text-align:center}
+.confidence-text{font-size:.82rem;color:#8898aa;margin-top:4px;text-align:center}
 
-.prob-list{display:flex;flex-direction:column;gap:6px;height:100%;justify-content:center;overflow-y:auto;padding-right:4px;max-height:180px}
-.prob-row{display:flex;align-items:center;gap:12px;flex-shrink:0}
-.prob-label{width:112px;font-size:.7rem;color:#525f7f;text-align:right;flex-shrink:0;font-weight:500}
-.prob-bar-bg{flex:1;height:18px;background:#f1f3f5;border-radius:4px;overflow:hidden;position:relative;border:1px solid #e1e4e8}
+.prob-list{display:flex;flex-direction:column;gap:1px;height:100%;justify-content:center;overflow:hidden}
+.prob-row{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.prob-label{width:86px;font-size:.66rem;color:#525f7f;text-align:right;flex-shrink:0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prob-bar-bg{flex:1;height:9px;background:#f1f3f5;border-radius:3px;overflow:hidden;position:relative;border:1px solid #e1e4e8}
 .prob-bar-fill{height:100%;border-radius:3px;transition:width .3s;width:0}
-.prob-pct{width:40px;font-size:.7rem;color:#8898aa;text-align:left;flex-shrink:0;font-family:monospace}
+.prob-pct{width:32px;font-size:.66rem;color:#8898aa;text-align:left;flex-shrink:0;font-family:monospace}
 
-.stability-metrics{display:flex;flex-direction:column;gap:8px}
-.metric-item{display:flex;align-items:center;justify-content:space-between;padding:8px;background:#fafbfc;border-radius:6px;border:1px solid #e1e4e8}
-.metric-label{font-size:.7rem;color:#525f7f}
-.metric-value{font-size:.85rem;font-weight:700;color:#2c3e50;font-family:monospace}
-
-@media(max-width:1200px){
-    .input-section{grid-template-columns:1fr}
-    .model-section{grid-template-columns:1fr 1fr;min-height:500px}
-    .output-section{grid-template-columns:1fr}
-}
-@media(max-width:700px){
-    .dashboard-container{grid-template-rows:auto auto auto auto;padding:12px}
-    .input-section,.model-section,.output-section{grid-template-columns:1fr;height:auto;min-height:auto}
-    .waveform-container{min-height:250px}
-    .model-section{min-height:600px}
-    .pipeline-container{flex-direction:column}
-}
+.stability-metrics{display:flex;flex-direction:column;gap:4px;justify-content:center;height:100%}
+.metric-item{display:flex;align-items:center;justify-content:space-between;padding:4px 7px;background:#fafbfc;border-radius:5px;border:1px solid #e1e4e8}
+.metric-label{font-size:.73rem;color:#525f7f}
+.metric-value{font-size:.82rem;font-weight:700;color:#2c3e50;font-family:monospace}
+.live-stat-card{background:#fafbfc;border:1px solid #e1e4e8;border-radius:6px;padding:4px 8px;display:flex;flex-direction:column;gap:1px}
+.live-stat-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.4px;color:#8898aa;font-weight:600}
+.live-stat-value{font-size:.92rem;font-weight:700;color:#2c3e50;font-family:monospace}
+.live-stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;flex:1}
+.activity-timer{font-size:1.4rem;font-weight:800;color:#1f6feb;text-align:center;font-family:monospace}
+.activity-timer-label{font-size:.72rem;color:#8898aa;text-align:center;margin-top:2px}
+.inference-sparkline{width:100%;height:32px;display:block}
+.activity-history{display:flex;flex-direction:column;gap:4px;overflow:hidden;flex:1;min-height:0}
+.history-row{display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:6px;border-left:3px solid #e1e4e8;background:#fafbfc;flex-shrink:0}
+.history-label{font-size:.80rem;font-weight:700;color:#2c3e50}
+.history-time{font-size:.70rem;color:#8898aa;font-family:monospace}
+.correction-active{background:#fff3e0;color:#e65100;font-weight:700}
 </style>
 </head>
 <body>
 <div class="topbar">
-<h1>HAR Dashboard V3</h1>
+<h1>Human Activity Recognition</h1>
 <div class="status">
 <div class="dot" id="connDot"></div>
 <span id="connLabel">Disconnected</span>
@@ -142,26 +148,38 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 
 <div class="section-header">Model Working</div>
 <div class="section model-section">
-<div class="model-visual">
-<div class="model-visual-label">Attention Weights</div>
-<canvas id="attentionCanvas" class="heatmap-canvas"></canvas>
+<div class="model-visual" style="justify-content:space-between">
+<div class="model-visual-label">Live Sensor Stats</div>
+<div class="live-stats-grid">
+<div class="live-stat-card">
+<div class="live-stat-label">Gravity Norm</div>
+<div class="live-stat-value" id="liveGravity">-- m/s²</div>
+</div>
+<div class="live-stat-card">
+<div class="live-stat-label">Jitter</div>
+<div class="live-stat-value" id="liveJitter">-- ms</div>
+</div>
+<div class="live-stat-card">
+<div class="live-stat-label">Gravity Aligned</div>
+<div class="live-stat-value" id="liveAligned">--</div>
+</div>
+<div class="live-stat-card">
+<div class="live-stat-label">Spectral Radius</div>
+<div class="live-stat-value" id="liveSpectral">--</div>
+</div>
+</div>
+<div style="text-align:center;padding:6px 0">
+<div class="activity-timer" id="activityTimer">0.0s</div>
+<div class="activity-timer-label" id="activityTimerLabel">in current activity</div>
+</div>
+<div style="flex-shrink:0">
+<div style="font-size:.72rem;color:#8898aa;font-weight:600;margin-bottom:4px">INFERENCE TIME (ms)</div>
+<canvas id="inferenceSparkline" class="inference-sparkline"></canvas>
+</div>
 </div>
 <div class="model-visual">
-<div class="model-visual-label">Feature Activations</div>
-<div class="feature-bars" id="featureBars"></div>
-</div>
-<div class="model-visual">
-<div class="model-visual-label">Processing Pipeline</div>
-<div class="pipeline-container">
-<div class="pipeline-stage" id="stageInput"><div class="pipeline-stage-label">Input</div><div class="pipeline-stage-time">0ms</div></div>
-<div class="pipeline-stage" id="stageReservoir"><div class="pipeline-stage-label">Reservoir</div><div class="pipeline-stage-time">0ms</div></div>
-<div class="pipeline-stage" id="stageDSConv"><div class="pipeline-stage-label">DS-Conv</div><div class="pipeline-stage-time">0ms</div></div>
-<div class="pipeline-stage" id="stageAttention"><div class="pipeline-stage-label">Attention</div><div class="pipeline-stage-time">0ms</div></div>
-<div class="pipeline-stage" id="stageOutput"><div class="pipeline-stage-label">Output</div><div class="pipeline-stage-time">0ms</div></div>
-</div>
-<div style="text-align:center;margin-top:12px;font-size:.7rem;color:#8898aa">
-Spectral Radius: <span id="spectralRadius" class="mono">--</span>
-</div>
+<div class="model-visual-label">Recent Activity History</div>
+<div class="activity-history" id="activityHistory"></div>
 </div>
 </div>
 
@@ -177,20 +195,24 @@ Spectral Radius: <span id="spectralRadius" class="mono">--</span>
 <div class="prob-list" id="probList"></div>
 <div class="stability-metrics">
 <div class="metric-item">
+<span class="metric-label">Raw Model</span>
+<span class="metric-value mono" id="metricRaw">--</span>
+</div>
+<div class="metric-item">
+<span class="metric-label">Correction</span>
+<span class="metric-value mono" style="font-size:.62rem" id="metricCorrection">none</span>
+</div>
+<div class="metric-item">
 <span class="metric-label">Inference Time</span>
-<span class="metric-value mono" id="metricInference">0 ms</span>
+<span class="metric-value mono" id="metricInference">-- ms</span>
 </div>
 <div class="metric-item">
-<span class="metric-label">Confidence Threshold</span>
-<span class="metric-value mono" id="metricThreshold">0.40</span>
-</div>
-<div class="metric-item">
-<span class="metric-label">Majority Vote</span>
-<span class="metric-value mono" id="metricVote">--</span>
-</div>
-<div class="metric-item">
-<span class="metric-label">Prediction Count</span>
+<span class="metric-label">Predictions</span>
 <span class="metric-value mono" id="metricCount">0</span>
+</div>
+<div class="metric-item" style="flex-direction:column;align-items:flex-start;gap:3px">
+<span class="metric-label" style="font-size:.62rem">Model</span>
+<span class="metric-value mono" style="font-size:.58rem;word-break:break-all;white-space:normal" id="metricThreshold">--</span>
 </div>
 </div>
 </div>
@@ -212,8 +234,11 @@ var gyroData={x:[],y:[],z:[]};
 var currentActivity="--";
 var currentConfidence=0;
 var currentProbabilities={};
-var attentionWeights=null;
+var inputWindow=null;
 var features=null;
+var inferenceHistory=[];
+var activityStartTime=Date.now();
+var lastActivityLabel="--";
 
 var connDot=document.getElementById("connDot");
 var connLabel=document.getElementById("connLabel");
@@ -222,13 +247,14 @@ var confBar=document.getElementById("confBar");
 var confText=document.getElementById("confText");
 var probList=document.getElementById("probList");
 var featureBars=document.getElementById("featureBars");
-
 var accelCanvas=document.getElementById("accelCanvas");
 var gyroCanvas=document.getElementById("gyroCanvas");
-var attentionCanvas=document.getElementById("attentionCanvas");
+var sparklineCanvas=document.getElementById("inferenceSparkline");
 var accelCtx=accelCanvas.getContext("2d");
 var gyroCtx=gyroCanvas.getContext("2d");
-var attentionCtx=attentionCanvas.getContext("2d");
+var sparkCtx=sparklineCanvas.getContext("2d");
+var activityHistoryEl=document.getElementById("activityHistory");
+var activityLog=[];
 
 function initProbList(){
 probList.innerHTML="";
@@ -278,7 +304,6 @@ row.appendChild(barBg);
 featureBars.appendChild(row);
 }
 }
-initFeatureBars();
 
 function setConn(on){
 connDot.className=on?"dot on":"dot";
@@ -291,15 +316,15 @@ if(arr.length>WINDOW)arr.shift();
 }
 
 function resizeCanvas(canvas){
-var rect=canvas.parentElement.getBoundingClientRect();
-var cw=rect.width;
-var ch=rect.parentElement.querySelector("canvas")===canvas?rect.height-20:rect.height-20;
-if(ch<60)ch=60;
-if(canvas.width!==Math.floor(cw*devicePixelRatio)||canvas.height!==Math.floor(ch*devicePixelRatio)){
-canvas.width=Math.floor(cw*devicePixelRatio);
-canvas.height=Math.floor(ch*devicePixelRatio);
-canvas.style.width=cw+"px";
-canvas.style.height=ch+"px";
+var dpr=window.devicePixelRatio||1;
+var cw=canvas.offsetWidth||canvas.parentElement&&canvas.parentElement.clientWidth||200;
+var ch=canvas.offsetHeight||60;
+var pw=Math.floor(cw*dpr);
+var ph=Math.floor(ch*dpr);
+if(pw<2)pw=2;if(ph<2)ph=2;
+if(canvas.width!==pw||canvas.height!==ph){
+canvas.width=pw;
+canvas.height=ph;
 }
 }
 
@@ -379,10 +404,75 @@ ctx.fillRect(j*cellW,i*cellH,cellW,cellH);
 }
 }
 
+function addActivityHistory(label,conf){
+if(!label||label==="--"||label==="Uncertain")return;
+var last=activityLog[activityLog.length-1];
+if(last&&last.label===label){last.count++;return;}
+if(last){last.durSec=(last.count*0.3).toFixed(1);}
+var now=new Date();
+var timeStr=now.getHours().toString().padStart(2,"0")+":"+now.getMinutes().toString().padStart(2,"0")+":"+now.getSeconds().toString().padStart(2,"0");
+activityLog.push({label:label,conf:Math.round(conf*100),time:timeStr,count:1,durSec:null});
+if(activityLog.length>12)activityLog.shift();
+renderActivityHistory();
+}
+
+function renderActivityHistory(){
+activityHistoryEl.innerHTML="";
+for(var i=activityLog.length-1;i>=0;i--){
+var entry=activityLog[i];
+var row=document.createElement("div");
+row.className="history-row";
+row.style.borderLeftColor=COLORS[entry.label]||"#1f6feb";
+var lbl=document.createElement("span");
+lbl.className="history-label";
+lbl.textContent=entry.label;
+lbl.style.color=COLORS[entry.label]||"#2c3e50";
+var right=document.createElement("span");
+right.className="history-time";
+var dur=entry.durSec?entry.durSec+"s · ":"";
+right.textContent=dur+entry.conf+"% · "+entry.time;
+row.appendChild(lbl);row.appendChild(right);
+activityHistoryEl.appendChild(row);
+}
+}
+
+function drawSparkline(canvas,ctx,data,color){
+resizeCanvas(canvas);
+var w=canvas.width,h=canvas.height;
+ctx.clearRect(0,0,w,h);
+if(data.length<2)return;
+var minV=Math.min.apply(null,data),maxV=Math.max.apply(null,data);
+var range=maxV-minV||1;
+ctx.strokeStyle=color||"#1f6feb";
+ctx.lineWidth=1.5;
+ctx.beginPath();
+for(var i=0;i<data.length;i++){
+var px=(i/(data.length-1))*w;
+var py=h-((data[i]-minV)/range)*(h-4)-2;
+if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+}
+ctx.stroke();
+}
+
+function updateActivityTimer(label){
+if(label!==lastActivityLabel&&label!=="--"&&label!=="Uncertain"){
+activityStartTime=Date.now();
+lastActivityLabel=label;
+}
+var elapsed=((Date.now()-activityStartTime)/1000).toFixed(1);
+var timerEl=document.getElementById("activityTimer");
+var labelEl=document.getElementById("activityTimerLabel");
+if(timerEl)timerEl.textContent=elapsed+"s";
+if(labelEl)labelEl.textContent="in "+lastActivityLabel;
+}
+
 function render(){
+try{
 drawChart(accelCtx,accelCanvas,[accelData.x,accelData.y,accelData.z],["#e74c3c","#27ae60","#3498db"]);
 drawChart(gyroCtx,gyroCanvas,[gyroData.x,gyroData.y,gyroData.z],["#e67e22","#1abc9c","#9b59b6"]);
-drawHeatmap(attentionCtx,attentionCanvas,attentionWeights);
+drawSparkline(sparklineCanvas,sparkCtx,inferenceHistory,"#1f6feb");
+updateActivityTimer(currentActivity);
+}catch(e){}
 requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
@@ -441,22 +531,43 @@ el.querySelector(".pipeline-stage-time").textContent="0ms";
 }
 
 function updateStats(data){
+var modelInfo=data.model_info||{};
+var diagnostics=data.diagnostics||{};
 if(data.sensor){
+var source=data.sensor.source||"Phone";
+var mode=data.sensor.accelMode?(" / "+data.sensor.accelMode):"";
+document.getElementById("statSource").textContent=source+mode;
+if(!diagnostics.acc_mag_mean){
 var accMag=Math.sqrt(data.sensor.ax*data.sensor.ax+data.sensor.ay*data.sensor.ay+data.sensor.az*data.sensor.az);
 document.getElementById("statAccMean").textContent=accMag.toFixed(2);
-document.getElementById("statRate").textContent="50 Hz";
+}
+}
+if(diagnostics.sample_rate_hz!==undefined){
+document.getElementById("statRate").textContent=diagnostics.sample_rate_hz.toFixed(1)+" Hz";
+}
+if(diagnostics.acc_mag_mean!==undefined){
+document.getElementById("statAccMean").textContent=diagnostics.acc_mag_mean.toFixed(2);
+}
+if(diagnostics.acc_mag_std!==undefined){
+document.getElementById("statAccStd").textContent=diagnostics.acc_mag_std.toFixed(2);
+}
+if(diagnostics.gyro_std!==undefined){
+document.getElementById("statGyroStd").textContent=diagnostics.gyro_std.toFixed(3);
 }
 if(data.buffer_size!==undefined){
-document.getElementById("statBuffer").textContent=data.buffer_size+"/50";
+document.getElementById("statBuffer").textContent=data.buffer_size+"/"+(modelInfo.window_size||50);
 }
 if(data.inference_time_ms!==undefined){
-document.getElementById("metricInference").textContent=data.inference_time_ms.toFixed(1)+" ms";
-}
-if(data.phone_connected!==undefined){
-document.getElementById("statSource").textContent=data.phone_connected>0?"Phone":"--";
+var infEl=document.getElementById("metricInference");
+if(infEl)infEl.textContent=data.inference_time_ms.toFixed(1)+" ms";
 }
 if(data.spectral_radius!==undefined){
 document.getElementById("spectralRadius").textContent=data.spectral_radius.toFixed(4);
+}
+if(modelInfo.checkpoint){
+var mtEl=document.getElementById("metricThreshold");
+if(mtEl)mtEl.textContent=(modelInfo.model_loaded?"Model":"Heuristic")+": "+modelInfo.checkpoint;
+if(modelInfo.warning){connLabel.textContent="Model warning";}
 }
 if(data.status){
 var qualitySignal=50;
@@ -464,6 +575,11 @@ var qualityNoise=20;
 var qualityNorm=80;
 if(data.status==="Streaming"){qualitySignal=80;qualityNoise=30;}
 if(data.status==="Collecting"){qualitySignal=40;qualityNoise=50;}
+if(diagnostics.sensor_health==="ok"){qualitySignal=90;}
+if(diagnostics.sensor_health==="low_accel_magnitude"){qualitySignal=25;}
+if(diagnostics.sensor_health==="sample_rate_warning"){qualitySignal=45;}
+if(diagnostics.jitter_ms!==undefined){qualityNoise=Math.min(100,Math.round(diagnostics.jitter_ms*4));}
+if(diagnostics.z_abs_mean!==undefined){qualityNorm=Math.max(0,Math.min(100,100-Math.round(diagnostics.z_abs_mean*12)));}
 document.getElementById("qualitySignal").style.width=qualitySignal+"%";
 document.getElementById("qualityNoise").style.width=qualityNoise+"%";
 document.getElementById("qualityNorm").style.width=qualityNorm+"%";
@@ -510,24 +626,40 @@ pushData(gyroData.z,msg.sensor.gz||0);
 }
 if(msg.activity){
 updateActivity(msg.activity,msg.confidence);
+addActivityHistory(msg.activity,msg.confidence);
 if(msg.probabilities){
 updateProbabilities(msg.probabilities);
 }
 totalPredictions++;
 document.getElementById("metricCount").textContent=totalPredictions;
-predictionHistory.push(msg.activity);
-if(predictionHistory.length>5)predictionHistory.shift();
-var voteMode=predictionHistory.length>0?predictionHistory[Math.floor(predictionHistory.length/2)]:"--";
-document.getElementById("metricVote").textContent=voteMode;
+if(msg.raw_prediction)document.getElementById("metricRaw").textContent=msg.raw_prediction;
+var corr=msg.correction||"none";
+var corrEl=document.getElementById("metricCorrection");
+if(corrEl){
+corrEl.textContent=corr;
+corrEl.className="metric-value mono"+(corr!=="none"?" correction-active":"");
+corrEl.style.fontSize=corr!=="none"?".58rem":".62rem";
 }
-if(msg.attention_weights){
-attentionWeights=msg.attention_weights;
+if(msg.inference_time_ms){inferenceHistory.push(msg.inference_time_ms);if(inferenceHistory.length>40)inferenceHistory.shift();}
 }
-if(msg.features){
-updateFeatures(msg.features);
+if(msg.features){updateFeatures(msg.features);}
+if(msg.diagnostics){
+var d=msg.diagnostics;
+var gEl=document.getElementById("liveGravity");
+var jEl=document.getElementById("liveJitter");
+var aEl=document.getElementById("liveAligned");
+if(gEl&&d.gravity_norm!==undefined)gEl.textContent=d.gravity_norm.toFixed(2)+" m/s²";
+if(jEl&&d.jitter_ms!==undefined)jEl.textContent=d.jitter_ms.toFixed(1)+" ms";
+if(aEl&&d.gravity_aligned!==undefined){
+aEl.textContent=d.gravity_aligned?"Yes ✓":"No";
+aEl.style.color=d.gravity_aligned?"#27ae60":"#e74c3c";
+}
+}
+if(msg.spectral_radius){
+var sEl=document.getElementById("liveSpectral");
+if(sEl)sEl.textContent=msg.spectral_radius.toFixed(4);
 }
 updateStats(msg);
-updatePipeline(4,msg.inference_time_ms||0);
 }catch(e){}
 };
 }

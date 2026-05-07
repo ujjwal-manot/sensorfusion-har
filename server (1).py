@@ -5,19 +5,9 @@ import os
 import socket
 import sys
 import time
-import threading
 from collections import Counter, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
-
-
-def safe_float(v, default=0.0):
-    """Return float(v) unless it is NaN/inf, in which case return default."""
-    try:
-        f = float(v)
-        return f if math.isfinite(f) else default
-    except (TypeError, ValueError):
-        return default
 
 import numpy as np
 import torch
@@ -25,81 +15,6 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-try:
-    import serial as _pyserial
-    _SERIAL_AVAILABLE = True
-except ImportError:
-    _SERIAL_AVAILABLE = False
-
-# ---------------------------------------------------------------------------
-# ESP32 Serial-inference bridge
-# Set env var ESP32_PORT (e.g. "COM5" or "/dev/ttyUSB0") to route inference
-# through the ESP32 instead of the local PyTorch model.
-# ---------------------------------------------------------------------------
-ESP32_PORT = os.environ.get("ESP32_PORT", "").strip()
-ESP32_BAUD = int(os.environ.get("ESP32_BAUD", "460800"))
-_esp32_serial: "serial.Serial | None" = None  # type: ignore[name-defined]
-_esp32_lock = threading.Lock()
-
-
-def _esp32_connect():
-    global _esp32_serial
-    if not _SERIAL_AVAILABLE or not ESP32_PORT:
-        return False
-    try:
-        with _esp32_lock:
-            if _esp32_serial and _esp32_serial.is_open:
-                return True
-            _esp32_serial = _pyserial.Serial(
-                ESP32_PORT, ESP32_BAUD, timeout=0.5, write_timeout=1.0
-            )
-            time.sleep(2.0)  # wait for ESP32 boot
-            _esp32_serial.reset_input_buffer()
-            print(f"[esp32] Connected on {ESP32_PORT} @ {ESP32_BAUD} baud")
-        return True
-    except Exception as e:
-        print(f"[esp32] Connect failed: {e}")
-        _esp32_serial = None
-        return False
-
-
-def _esp32_infer(normed: np.ndarray, labels: dict) -> "tuple | None":
-    """Send normalised window to ESP32, return (label, conf, probs) or None."""
-    global _esp32_serial
-    if not _esp32_serial or not _esp32_serial.is_open:
-        if not _esp32_connect():
-            return None
-    try:
-        rows = normed.tolist()
-        payload = json.dumps({"w": rows}) + "\n"
-        with _esp32_lock:
-            _esp32_serial.write(payload.encode())
-            _esp32_serial.flush()
-            resp = _esp32_serial.readline().decode(errors="replace").strip()
-        if not resp:
-            return None
-        r = json.loads(resp)
-        if "error" in r:
-            print(f"[esp32] Inference error: {r}")
-            return None
-        cls_idx = int(r["class"])
-        conf = float(r["conf"])
-        label = labels.get(cls_idx, r.get("label", "Uncertain"))
-        raw_probs = r.get("probs", [])
-        if raw_probs and len(raw_probs) == len(labels):
-            probs = {labels[i]: float(raw_probs[i]) for i in labels}
-        else:
-            probs = {labels[i]: 0.0 for i in labels}
-            probs[label] = conf
-        return label, conf, probs
-    except Exception as e:
-        print(f"[esp32] Serial error: {e}")
-        try:
-            _esp32_serial.close()
-        except Exception:
-            pass
-        _esp32_serial = None
-        return None
 
 ACTIVITY_LABELS = {
     0: "Walking",
@@ -140,7 +55,7 @@ DEFAULT_CHANNEL_STATS = {
 
 CHANNEL_ORDER = ["ax", "ay", "az", "gx", "gy", "gz"]
 WINDOW_SIZE = 50
-STRIDE = 15        # 15 samples @ 50 Hz = 0.3 s between inferences (was 25 = 0.5 s)
+STRIDE = 25
 TARGET_HZ = 50
 GRAVITY = 9.81
 
@@ -151,23 +66,15 @@ GRAVITY = 9.81
 # phone fell in). Set to False via env to disable for ablation.
 GRAVITY_ALIGN_ENABLED = os.environ.get("HAR_GRAVITY_ALIGN", "1") not in ("0", "false", "False", "")
 # Solution D — minimum dwell time (in inference windows) before the displayed
-# label is allowed to switch. With STRIDE=15 at 50 Hz, one window is 0.3 s.
-# DWELL_WINDOWS=2 means two consecutive matches (0.6 s) for low-confidence
-# predictions. HIGH_CONF_SWITCH lets the label swap instantly on the first
-# high-confidence prediction — removes latency for clear activity changes.
+# label is allowed to switch. With STRIDE=25 at 50 Hz, one window is 0.5 s,
+# so DWELL=2 means the new label has to be predicted twice in a row before
+# it is shown. This is what kills the "Sitting/Standing/Sitting" flicker
+# during transitions without hiding genuine activity changes.
 DWELL_WINDOWS = 2
-HIGH_CONF_SWITCH = 0.82   # switch after 1 inference if confidence >= this
-# EMA smoothing on raw model probabilities — alpha=0.40 gives a time constant
-# of ~0.6 s at 50 Hz / stride-15.  This eliminates label flicker caused by
-# the model alternating between two close-probability classes on consecutive
-# inferences.  Clear activity changes (large prob shift) still resolve in 1-2
-# inferences; ambiguous borders stay committed to the current label.
-EMA_ALPHA = 0.40
 
 # Track the displayed label and its run-length so we can enforce min-dwell
 # without recomputing it from the deque every time.
 _DISPLAY_STATE = {"label": None, "runlen": 0, "candidate": None, "candidate_runlen": 0}
-_EMA_STATE = {"probs": None}  # running EMA of class probabilities
 
 BASE_DIR = Path(__file__).resolve().parent
 def _checkpoint_labels(path):
@@ -187,10 +94,7 @@ def _checkpoint_metric_score(path):
         m = state.get("metrics", {}) or {}
         # Weight min_f1 most heavily — that's the worst-class robustness, which
         # is what cripples real-world use. Then macro_f1, then accuracy.
-        # Add rotation_robustness_pct if present (pocket-robust checkpoints).
-        base = 4.0 * float(m.get("min_f1", 0.0)) + float(m.get("macro_f1", 0.0)) + float(m.get("acc", 0.0))
-        rot = float(m.get("rotation_robustness_pct", 0.0)) / 100.0
-        return base + 2.0 * rot
+        return 4.0 * float(m.get("min_f1", 0.0)) + float(m.get("macro_f1", 0.0)) + float(m.get("acc", 0.0))
     except Exception:
         return -1.0
 
@@ -204,16 +108,14 @@ def _find_checkpoint():
         # as fallbacks for environments that explicitly want pocket-collected data, but the
         # decision is now made by metric score (see _select_best below) rather than by
         # raw position in this list.
-        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_pocket_v3.pt",
-        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_pocket_v2.pt",
-        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_pocket_motionsense.pt",
-        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_pocket_final.pt",
         BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_final.pt",
         BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_rw.pt",
         BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11.pt",
         BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_pocket_v3.pt",
         BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_pocket_v3_smoke.pt",
         BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_11class.pt",
+        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_useful11_pocket_robust.pt",
+        BASE_DIR / "checkpoints" / "best_sensorfusion_esp32_v2_pocket_final.pt",
         BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_useful11_final.pt",
         BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_pocket_v3.pt",
         BASE_DIR / "checkpoints_v2" / "best_sensorfusion_esp32_v2_pocket_v3_7cls.pt",
@@ -371,8 +273,7 @@ def load_model():
             STRIDE = 64
         else:
             WINDOW_SIZE = 50
-            # Keep the module-level STRIDE (15 samples = 0.3 s at 50 Hz).
-            # Do NOT override it here so the latency tuning above is respected.
+            STRIDE = 25
         print(f"[server] Window size set to {WINDOW_SIZE}, stride {STRIDE}")
 
         norm_stats = state.get("normalization", state.get("normalization_stats", None))
@@ -559,20 +460,6 @@ def model_info_payload():
     return info
 
 
-def smooth_probs_ema(raw_probs: dict) -> dict:
-    """Apply exponential moving average to class probabilities.
-    Returns the smoothed probability dict; also updates _EMA_STATE in place."""
-    state = _EMA_STATE
-    if state["probs"] is None:
-        state["probs"] = dict(raw_probs)
-        return dict(raw_probs)
-    smoothed = {}
-    for cls, p in raw_probs.items():
-        smoothed[cls] = EMA_ALPHA * p + (1.0 - EMA_ALPHA) * state["probs"].get(cls, p)
-    state["probs"] = smoothed
-    return smoothed
-
-
 def reset_stream_state():
     global samples_since_inference
     sensor_buffer.clear()
@@ -582,7 +469,6 @@ def reset_stream_state():
     _DISPLAY_STATE["runlen"] = 0
     _DISPLAY_STATE["candidate"] = None
     _DISPLAY_STATE["candidate_runlen"] = 0
-    _EMA_STATE["probs"] = None
 
 
 def validate_phone_sample(data):
@@ -605,25 +491,11 @@ def validate_phone_sample(data):
     return sample, None
 
 
-_EMPTY_DIAG = {
-    "sample_rate_hz": 0.0, "window_duration_sec": 0.0, "jitter_ms": 0.0,
-    "acc_mag_mean": 0.0, "acc_mag_std": 0.0, "acc_mean": [0.0, 0.0, 0.0],
-    "gyro_std": 0.0, "z_abs_mean": 0.0, "z_abs_max": 0.0,
-    "gravity_like": False, "sensor_health": "no_data",
-}
-
-
 def window_diagnostics(data, resampled=None, normed=None):
-    if not data:
-        return dict(_EMPTY_DIAG)
     timestamps = np.asarray([s["t"] for s in data], dtype=np.float64)
     values = np.asarray([[s[ch] for ch in CHANNEL_ORDER] for s in data], dtype=np.float32)
-    if values.ndim == 1 or values.shape[0] == 0:
-        return dict(_EMPTY_DIAG)
     if resampled is None:
         resampled = values
-    if resampled.ndim == 1 or resampled.shape[0] == 0:
-        return dict(_EMPTY_DIAG)
     acc = np.asarray(resampled[:, :3], dtype=np.float32)
     gyro = np.asarray(resampled[:, 3:], dtype=np.float32)
     acc_mag = np.sqrt(np.sum(acc ** 2, axis=1))
@@ -649,16 +521,16 @@ def window_diagnostics(data, resampled=None, normed=None):
     else:
         sensor_health = "ok"
     return {
-        "sample_rate_hz": safe_float(sample_rate_hz),
-        "window_duration_sec": safe_float(duration_sec),
-        "jitter_ms": safe_float(jitter_ms),
-        "acc_mag_mean": safe_float(acc_mag_mean),
-        "acc_mag_std": safe_float(acc_mag_std),
-        "acc_mean": [safe_float(v) for v in acc_mean.tolist()],
-        "gyro_std": safe_float(gyro_std),
-        "z_abs_mean": safe_float(z_abs_mean),
-        "z_abs_max": safe_float(z_abs_max),
-        "gravity_like": bool(gravity_like),
+        "sample_rate_hz": round(sample_rate_hz, 2),
+        "window_duration_sec": round(duration_sec, 3),
+        "jitter_ms": round(jitter_ms, 2),
+        "acc_mag_mean": round(acc_mag_mean, 3),
+        "acc_mag_std": round(acc_mag_std, 3),
+        "acc_mean": [round(float(v), 3) for v in acc_mean.tolist()],
+        "gyro_std": round(gyro_std, 4),
+        "z_abs_mean": round(z_abs_mean, 3),
+        "z_abs_max": round(z_abs_max, 3),
+        "gravity_like": gravity_like,
         "sensor_health": sensor_health,
     }
 
@@ -701,61 +573,6 @@ def apply_realtime_corrections(label, conf, probs, diagnostics, data):
     generic_accel = "Generic Sensor" in source and accel_mode == "Accelerometer"
     correction = None
 
-    # Rule 0: Stairs Up/Down vs Walking disambiguation.
-    # Physical basis: climbing stairs produces a rhythmic vertical impulse
-    # — acc_mag_std > 2.5 m/s² in pocket data. Flat walking is 0.8–2.0 m/s².
-    # The model over-fires Stairs Up because pocket-phone stair data is scarce.
-    # Two tiers:
-    #   Tier A (acc_std < 2.0): definitively NOT stairs → always correct.
-    #   Tier B (2.0 ≤ acc_std < 2.5): borderline → correct if walk_prob > 0.01
-    #     or confidence is below 0.85 (model not very sure).
-    walk_prob = float(probs.get("Walking", 0.0))
-    stairs_up_prob = float(probs.get("Stairs Up", 0.0))
-    stairs_dn_prob = float(probs.get("Stairs Down", 0.0))
-    jog_prob = float(probs.get("Jogging", 0.0))
-    jump_prob = float(probs.get("Jumping", 0.0))
-    if label in ("Stairs Up", "Stairs Down"):
-        # Tier C (checked first): dynamics far too high for stair climbing.
-        # Real stairs: acc_std 1.5–3.5 m/s². At >3.8 the user is jogging/jumping,
-        # not climbing — the model is confusing rhythmic up-down motion with stairs.
-        if acc_std > 3.8:
-            best_alt = "Jogging" if jog_prob >= walk_prob else "Walking"
-            best_prob = max(jog_prob, walk_prob)
-            label = best_alt
-            conf = max(best_prob, min(0.68, conf * 0.80))
-            probs = force_probability_label(probs, label, conf)
-            correction = "high_energy_stairs_to_dynamic"
-            return label, conf, probs, correction
-    if label in ("Stairs Up", "Stairs Down") and gyro_std < 1.5:
-        if acc_std < 2.0:
-            # Tier A: dynamics too low for real stairs — correct unconditionally.
-            new_conf = walk_prob if walk_prob > 0.20 else max(0.62, min(0.75, conf * 0.80))
-            label = "Walking"
-            conf = new_conf
-            probs = force_probability_label(probs, label, conf)
-            correction = "low_dynamics_stairs_to_walking"
-            return label, conf, probs, correction
-        elif acc_std < 2.5 and (walk_prob > 0.01 or conf < 0.85):
-            # Tier B: borderline dynamics, model not convincingly sure.
-            new_conf = max(walk_prob, min(0.72, conf * 0.82))
-            label = "Walking"
-            conf = new_conf
-            probs = force_probability_label(probs, label, conf)
-            correction = "borderline_dynamics_stairs_to_walking"
-            return label, conf, probs, correction
-    # Tier D: jogging-range dynamics with moderate gyro (gyro_std 1.5-2.5)
-    # — the model mistakes jogging cadence for stair rhythm. Catches the gap
-    # between Tier A/B (gyro<1.5) and Tier C (acc>3.8).
-    if label in ("Stairs Up", "Stairs Down") and 2.0 <= acc_std <= 3.8 and 1.5 <= gyro_std <= 2.5:
-        if jog_prob > 0.05 or walk_prob > 0.10:
-            best_alt = "Jogging" if jog_prob >= walk_prob else "Walking"
-            best_prob = max(jog_prob, walk_prob)
-            label = best_alt
-            conf = max(best_prob, min(0.68, conf * 0.82))
-            probs = force_probability_label(probs, label, conf)
-            correction = "gyro_cadence_stairs_to_jogging"
-            return label, conf, probs, correction
-
     # Rule 1: stationary + Generic-Sensor pocket-Lying => Sitting.
     # Same as the original fix; kept for compatibility and tests.
     if generic_accel and stationary and label == "Lying Down":
@@ -784,62 +601,7 @@ def apply_realtime_corrections(label, conf, probs, diagnostics, data):
             correction = "very_stationary_dynamic_to_static_posture"
             return label, conf, probs, correction
 
-    # Rule 2b: Sitting vs Standing disambiguation using acc_std sway.
-    # When standing, the body sways slightly (acc_std ~0.10–0.55 m/s²).
-    # When sitting, the phone is very still (acc_std < 0.10 m/s²).
-    # The model (trained on waist data) heavily over-predicts Sitting for
-    # any stationary window because it never saw pocket-Standing data.
-    # This rule corrects that bias until the MotionSense checkpoint is live.
-    if stationary and label == "Sitting" and 0.10 <= acc_std <= 0.55:
-        label = "Standing"
-        conf = max(0.52, min(0.75, float(conf) * 0.88))
-        probs = force_probability_label(probs, label, conf)
-        correction = "sway_pattern_sitting_to_standing"
-        return label, conf, probs, correction
-
-    # Rule 3a: Jogging/Running → Jumping.
-    # Physical signature: Jumping in place has high IMPACT acc_std but LOW
-    # gyro_std (vertical motion, no trunk rotation). Running/Jogging sustain
-    # high acc AND significant gyro (arm swing).
-    # Threshold 3.8 m/s² chosen for pocket placement: impact is dampened vs
-    # waist mount (original 5.0 was too high and missed most pocket jumps).
-    # gyro guard raised to <2.0 because pocket gyro is noisier than waist.
-    if label in ("Jogging", "Running") and acc_std > 3.8 and gyro_std < 2.0:
-        if jump_prob > 0.04 or conf < 0.78:
-            label = "Jumping"
-            conf = max(jump_prob, min(0.72, conf * 0.88))
-            probs = force_probability_label(probs, label, conf)
-            correction = "high_impact_low_gyro_to_jumping"
-            return label, conf, probs, correction
-
-    # Rule 3b: Running vs Jogging disambiguation.
-    # acc_std > 5.0 AND gyro >= 2.0 (high rotation = running, not jumping).
-    if label == "Jogging" and acc_std > 5.0 and gyro_std >= 2.0:
-        run_prob = float(probs.get("Running", 0.0))
-        if run_prob > 0.05 or conf < 0.80:
-            new_conf = max(run_prob, min(0.72, conf * 0.85))
-            label = "Running"
-            conf = new_conf
-            probs = force_probability_label(probs, label, conf)
-            correction = "high_dynamics_jogging_to_running"
-            return label, conf, probs, correction
-
-    # Rule 3c: Waist Bending guard — requires moderate acc_std (body bending
-    # forward from standing, not jumping or running) and low gyro (slow bend).
-    # Model may misfire Waist Bending for high-energy activities.
-    if label == "Waist Bending" and (acc_std > 3.5 or gyro_std > 2.0):
-        jogging_prob = float(probs.get("Jogging", 0.0))
-        walking_prob = float(probs.get("Walking", 0.0))
-        best_alt = "Jogging" if jogging_prob >= walking_prob else "Walking"
-        best_prob = max(jogging_prob, walking_prob)
-        if best_prob > 0.01 or conf < 0.80:
-            label = best_alt
-            conf = max(best_prob, min(0.68, conf * 0.80))
-            probs = force_probability_label(probs, label, conf)
-            correction = "high_energy_waist_bending_corrected"
-            return label, conf, probs, correction
-
-    # Rule 4: gravity-magnitude clearly outside 1g => sensor is not reporting
+    # Rule 3: gravity-magnitude clearly outside 1g => sensor is not reporting
     # total acceleration (e.g. linear-acceleration mode silently selected by
     # the browser). Mark as Uncertain rather than emitting any class — the
     # input distribution does not match training, so any output is unreliable.
@@ -852,19 +614,20 @@ def apply_realtime_corrections(label, conf, probs, diagnostics, data):
     return label, conf, probs, correction
 
 
-def update_display_label(raw_label, confidence=0.0):
+def update_display_label(raw_label):
     """Solution D: enforce a minimum dwell time before switching the displayed
     label, so transitions don't make the UI flicker.
 
-    With STRIDE=15 at 50Hz each window is 0.3 s.
-    - High confidence (>= HIGH_CONF_SWITCH): switch immediately on first match.
-    - Lower confidence: require DWELL_WINDOWS=2 consecutive matches (0.6 s).
-    "Uncertain" never counts as a new candidate.
+    A new candidate must be predicted for at least DWELL_WINDOWS consecutive
+    inferences before it replaces the current display label. "Uncertain" never
+    counts as a new candidate — it just freezes the last confident label.
     """
     state = _DISPLAY_STATE
     if raw_label == "Uncertain":
+        # Keep showing whatever was last confident.
         return state["label"] if state["label"] is not None else raw_label
     if state["label"] is None:
+        # First confident label seen. Show immediately.
         state["label"] = raw_label
         state["runlen"] = 1
         state["candidate"] = None
@@ -875,15 +638,13 @@ def update_display_label(raw_label, confidence=0.0):
         state["candidate"] = None
         state["candidate_runlen"] = 0
         return state["label"]
-    # Different from currently displayed — accumulate as candidate.
+    # Different from currently displayed label — accumulate as candidate.
     if raw_label == state["candidate"]:
         state["candidate_runlen"] += 1
     else:
         state["candidate"] = raw_label
         state["candidate_runlen"] = 1
-    # High-confidence prediction: switch immediately (no flicker risk).
-    required = 1 if confidence >= HIGH_CONF_SWITCH else DWELL_WINDOWS
-    if state["candidate_runlen"] >= required:
+    if state["candidate_runlen"] >= DWELL_WINDOWS:
         state["label"] = raw_label
         state["runlen"] = state["candidate_runlen"]
         state["candidate"] = None
@@ -966,20 +727,7 @@ def run_inference(data):
     features = None
     mode = "torch" if model is not None else "heuristic"
 
-    # ESP32 inference path: send normalised window over Serial, get prediction.
-    # Falls back to local PyTorch model if ESP32 is unavailable.
-    if ESP32_PORT:
-        esp_result = _esp32_infer(normed, ACTIVITY_LABELS)
-        if esp_result is not None:
-            label, conf, probs = esp_result
-            probs = smooth_probs_ema(probs)
-            label = max(probs, key=probs.get)
-            conf = probs[label]
-            mode = "esp32_serial"
-        else:
-            mode = "esp32_fallback_torch"
-
-    if (not ESP32_PORT or mode == "esp32_fallback_torch") and model is not None:
+    if model is not None:
         try:
             tensor = torch.FloatTensor(normed).unsqueeze(0).to(device)
             with torch.no_grad():
@@ -996,16 +744,12 @@ def run_inference(data):
                 conf = conf.item()
                 probs_np = probs_tensor.squeeze().cpu().numpy()
                 probs = {ACTIVITY_LABELS[i]: float(probs_np[i]) for i in ACTIVITY_LABELS}
-                # Apply EMA smoothing to stabilize predictions across inferences.
-                probs = smooth_probs_ema(probs)
-                # Re-derive label and confidence from smoothed probabilities.
-                label = max(probs, key=probs.get)
-                conf = probs[label]
+                label = ACTIVITY_LABELS[pred_idx]
         except Exception as e:
             print(f"[server] Model inference error: {e}")
             label, conf, probs = heuristic_classify(normed)
             mode = "heuristic_fallback"
-    elif not ESP32_PORT or mode == "esp32_fallback_torch":
+    else:
         label, conf, probs = heuristic_classify(normed)
 
     elapsed = (time.perf_counter() - t0) * 1000
@@ -1022,7 +766,7 @@ def run_inference(data):
     # been seen DWELL_WINDOWS times in a row. We still keep prediction_history
     # for compatibility but no longer use it for the displayed label.
     prediction_history.append(label)
-    smoothed_label = update_display_label(label, confidence=float(conf))
+    smoothed_label = update_display_label(label)
     pre_dwell_label = label
     label = smoothed_label
 
@@ -1046,10 +790,6 @@ def run_inference(data):
         result["attention_weights"] = attention_weights.cpu().numpy().tolist()
     if features is not None:
         result["features"] = features.cpu().numpy().tolist()
-    # Send normed input window for dashboard heatmap visualization (50x6, clipped to [-4,4])
-    result["input_window"] = [[round(float(np.clip(normed[t, c], -4.0, 4.0)), 3)
-                                for c in range(normed.shape[1])]
-                               for t in range(normed.shape[0])]
     return result
 
 

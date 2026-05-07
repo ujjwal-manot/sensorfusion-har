@@ -1,0 +1,18 @@
+{
+  "source_checkpoint": "best_sensorfusion_esp32_v2_useful11_pocket_v2.pt",
+  "fine_tuned_checkpoint": "best_sensorfusion_esp32_v2_useful11_pocket_v3.pt",
+  "motionsense_windows": 20284,
+  "calib_non_ms_windows": 209,
+  "rotation_robustness": {
+    "source": {
+      "agreement": 0.91125,
+      "n_windows": 150,
+      "n_rotations": 16
+    },
+    "fine_tuned": {
+      "agreement": 0.9625,
+      "n_windows": 150,
+      "n_rotations": 16
+    }
+  }
+}
